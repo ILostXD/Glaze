@@ -34,7 +34,7 @@ private const val TWIST_SHADER = """
     half4 main(float2 point) {
         float2 warped = twist(point, center, radius, angle);
         warped = twist(warped, center + float2(-radius * 0.22, radius * 0.18),
-            radius * 0.76, angle * 0.85);
+            radius * 0.82, angle * 0.95);
         return content.eval(warped);
     }
 """
@@ -49,7 +49,7 @@ internal actual fun Modifier.artworkTwist(): Modifier {
     return this.graphicsLayer {
         shader.setFloatUniform("center", size.width / 2f, size.height / 2f)
         shader.setFloatUniform("radius", size.width * 0.9f)
-        shader.setFloatUniform("angle", -3.25f)
+        shader.setFloatUniform("angle", -4.35f)
         renderEffect = effect
     }
 }

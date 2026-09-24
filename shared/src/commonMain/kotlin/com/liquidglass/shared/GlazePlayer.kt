@@ -454,7 +454,7 @@ private fun FluidArtworkBackground(
                 Box(Modifier.matchParentSize().background(backdropColor))
                 repeat(4) { index ->
                     val fraction = when (index) {
-                        0 -> 1.55f; 1 -> 1.10f; 2 -> 0.68f; else -> 0.55f
+                        0 -> 1.80f; 1 -> 1.30f; 2 -> 0.88f; else -> 0.72f
                     }
                     AsyncImage(
                         model = artUrl, contentDescription = null, contentScale = ContentScale.Crop,
