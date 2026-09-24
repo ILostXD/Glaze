@@ -459,7 +459,7 @@ private fun FluidArtworkBackground(
                     AsyncImage(
                         model = artUrl, contentDescription = null, contentScale = ContentScale.Crop,
                         onSuccess = { sky.invalidate() },
-                        modifier = Modifier.size(viewWidth * fraction).align(Alignment.TopStart)
+                        modifier = Modifier.requiredSize(viewWidth * fraction).align(Alignment.Center)
                             .graphicsLayer {
                                 val width = viewWidth.toPx()
                                 val inset = overscan.toPx()
@@ -483,8 +483,8 @@ private fun FluidArtworkBackground(
                                     2 -> width * (0.12f + 0.08f * sin(orbit))
                                     else -> width * (0.83f + 0.08f * sin(orbit))
                                 }
-                                translationX = centerX - size.width / 2f
-                                translationY = centerY - size.height / 2f
+                                translationX = centerX - sceneSize.toPx() / 2f
+                                translationY = centerY - sceneSize.toPx() / 2f
                             },
                     )
                 }
