@@ -450,7 +450,7 @@ private fun FluidArtworkBackground(
             // and blurring the whole scene. Stretch only that finished scene for portrait.
             Box(Modifier.requiredSize(sceneSize).align(Alignment.Center)
                 .graphicsLayer { scaleY = (maxHeight + overscan * 2f).toPx() / sceneSize.toPx() }
-                .saturateArtwork().blur(viewWidth * 0.12f).artworkTwist(seconds)) {
+                .saturateArtwork().blur(viewWidth * 0.065f).artworkTwist()) {
                 Box(Modifier.matchParentSize().background(backdropColor))
                 AsyncImage(
                     model = artUrl, contentDescription = null, contentScale = ContentScale.Crop,
@@ -495,9 +495,9 @@ private fun FluidArtworkBackground(
                 }
             }
             Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(
-                Color.Black.copy(alpha = 0.26f),
-                Color.Black.copy(alpha = 0.36f),
-                Color.Black.copy(alpha = 0.48f),
+                Color.Black.copy(alpha = 0.16f),
+                Color.Black.copy(alpha = 0.25f),
+                Color.Black.copy(alpha = 0.34f),
             ))))
         }
     }
