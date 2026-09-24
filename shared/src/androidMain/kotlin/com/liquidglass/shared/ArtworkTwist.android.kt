@@ -14,6 +14,7 @@ private const val TWIST_SHADER = """
     uniform float2 center;
     uniform float radius;
     uniform float angle;
+    uniform float time;
 
     float2 twist(float2 point, float2 pivot, float reach, float strength) {
         float2 relative = point - pivot;
@@ -32,6 +33,15 @@ private const val TWIST_SHADER = """
     }
 
     half4 main(float2 point) {
+        float2 position = (point - center) / radius;
+        float diagonal = sin((position.x + position.y) * 5.2 + time * 0.31);
+        float2 flow = radius * float2(
+            0.14 * sin(position.y * 5.1 + time * 0.37) + 0.08 * diagonal,
+            0.14 * sin(position.x * 4.5 - time * 0.29) - 0.08 * diagonal
+        );
+        float edge = min(min(point.x, point.y),
+            min(center.x * 2.0 - point.x, center.y * 2.0 - point.y));
+        point += flow * smoothstep(0.0, radius * 0.22, edge);
         float2 warped = twist(point, center, radius, angle);
         warped = twist(warped, center + float2(-radius * 0.22, radius * 0.18),
             radius * 0.82, angle * 0.95);
@@ -40,7 +50,7 @@ private const val TWIST_SHADER = """
 """
 
 @Composable
-internal actual fun Modifier.artworkTwist(): Modifier {
+internal actual fun Modifier.artworkTwist(seconds: Float): Modifier {
     if (Build.VERSION.SDK_INT < 33) return this
     val shader = remember { RuntimeShader(TWIST_SHADER) }
     val effect = remember(shader) {
@@ -50,6 +60,7 @@ internal actual fun Modifier.artworkTwist(): Modifier {
         shader.setFloatUniform("center", size.width / 2f, size.height / 2f)
         shader.setFloatUniform("radius", size.width * 0.9f)
         shader.setFloatUniform("angle", -4.35f)
+        shader.setFloatUniform("time", seconds)
         renderEffect = effect
     }
 }
