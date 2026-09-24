@@ -444,17 +444,17 @@ private fun FluidArtworkBackground(
     BoxWithConstraints(Modifier.fillMaxSize().clipToBounds().background(Color.Black)) {
         if (artUrl != null) {
             val viewWidth = maxWidth
-            val overscan = viewWidth * 0.22f
+            val overscan = viewWidth * 0.30f
             val sceneSize = viewWidth + overscan * 2f
             // The reference animates square, width-relative artwork copies before twisting
             // and blurring the whole scene. Stretch only that finished scene for portrait.
             Box(Modifier.requiredSize(sceneSize).align(Alignment.Center)
-                .graphicsLayer { scaleY = maxHeight.toPx() / sceneSize.toPx() }
-                .saturateArtwork().blur(viewWidth * 0.105f).artworkTwist()) {
+                .graphicsLayer { scaleY = (maxHeight + overscan * 2f).toPx() / sceneSize.toPx() }
+                .saturateArtwork().blur(viewWidth * 0.12f).artworkTwist()) {
                 Box(Modifier.matchParentSize().background(backdropColor))
                 repeat(4) { index ->
                     val fraction = when (index) {
-                        0 -> 1.80f; 1 -> 1.30f; 2 -> 0.88f; else -> 0.72f
+                        0 -> 2.80f; 1 -> 1.80f; 2 -> 1.12f; else -> 0.98f
                     }
                     AsyncImage(
                         model = artUrl, contentDescription = null, contentScale = ContentScale.Crop,
