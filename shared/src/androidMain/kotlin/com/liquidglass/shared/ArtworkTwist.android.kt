@@ -45,6 +45,7 @@ private const val TWIST_SHADER = """
         float2 warped = twist(point, center, radius, angle);
         warped = twist(warped, center + float2(-radius * 0.22, radius * 0.18),
             radius * 0.82, angle * 0.95);
+        warped = clamp(warped, float2(1.0), center * 2.0 - float2(1.0));
         return content.eval(warped);
     }
 """

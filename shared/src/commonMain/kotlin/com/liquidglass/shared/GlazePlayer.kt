@@ -452,14 +452,19 @@ private fun FluidArtworkBackground(
                 .graphicsLayer { scaleY = (maxHeight + overscan * 2f).toPx() / sceneSize.toPx() }
                 .saturateArtwork().blur(viewWidth * 0.12f).artworkTwist(seconds)) {
                 Box(Modifier.matchParentSize().background(backdropColor))
+                AsyncImage(
+                    model = artUrl, contentDescription = null, contentScale = ContentScale.Crop,
+                    onSuccess = { sky.invalidate() },
+                    modifier = Modifier.matchParentSize(),
+                )
                 repeat(4) { index ->
                     val fraction = when (index) {
-                        0 -> 2.80f; 1 -> 1.80f; 2 -> 1.12f; else -> 0.98f
+                        0 -> 1.60f; 1 -> 1.32f; 2 -> 0.94f; else -> 0.78f
                     }
                     AsyncImage(
                         model = artUrl, contentDescription = null, contentScale = ContentScale.Crop,
                         onSuccess = { sky.invalidate() },
-                        modifier = Modifier.requiredSize(viewWidth * fraction).align(Alignment.Center)
+                        modifier = Modifier.size(viewWidth * fraction).align(Alignment.Center)
                             .graphicsLayer {
                                 val width = viewWidth.toPx()
                                 val inset = overscan.toPx()
