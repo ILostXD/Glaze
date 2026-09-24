@@ -150,7 +150,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.PI
 import kotlin.math.abs
-import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
@@ -450,17 +449,15 @@ private fun FluidArtworkBackground(
             // and blurring the whole scene. Stretch only that finished scene for portrait.
             Box(Modifier.requiredSize(sceneSize).align(Alignment.Center)
                 .graphicsLayer { scaleY = (maxHeight + overscan * 2f).toPx() / sceneSize.toPx() }
-                .saturateArtwork().blur(viewWidth * 0.065f).artworkTwist()) {
+                .saturateArtwork().blur(viewWidth * 0.085f).artworkTwist()) {
                 Box(Modifier.matchParentSize().background(backdropColor))
                 AsyncImage(
                     model = artUrl, contentDescription = null, contentScale = ContentScale.Crop,
                     onSuccess = { sky.invalidate() },
                     modifier = Modifier.matchParentSize(),
                 )
-                repeat(4) { index ->
-                    val fraction = when (index) {
-                        0 -> 1.60f; 1 -> 1.32f; 2 -> 0.94f; else -> 0.78f
-                    }
+                repeat(2) { index ->
+                    val fraction = if (index == 0) 1.60f else 1.32f
                     AsyncImage(
                         model = artUrl, contentDescription = null, contentScale = ContentScale.Crop,
                         onSuccess = { sky.invalidate() },
@@ -468,26 +465,10 @@ private fun FluidArtworkBackground(
                             .graphicsLayer {
                                 val width = viewWidth.toPx()
                                 val inset = overscan.toPx()
-                                val radians = seconds * 1.7f * when (index) {
-                                    0 -> 0.09f
-                                    1 -> -0.24f
-                                    2 -> -0.18f
-                                    else -> 0.16f
-                                }
+                                val radians = seconds * 1.7f * if (index == 0) 0.09f else -0.24f
                                 rotationZ = radians * (180f / PI.toFloat())
-                                val orbit = radians * 0.75f
-                                val centerX = inset + when (index) {
-                                    0 -> width * 0.5f
-                                    1 -> width * 0.38f
-                                    2 -> width * (0.32f + 0.20f * cos(orbit))
-                                    else -> width * (0.65f + 0.18f * cos(orbit))
-                                }
-                                val centerY = inset + when (index) {
-                                    0 -> width * 0.5f
-                                    1 -> width * 0.45f
-                                    2 -> width * (0.12f + 0.08f * sin(orbit))
-                                    else -> width * (0.83f + 0.08f * sin(orbit))
-                                }
+                                val centerX = inset + width * if (index == 0) 0.5f else 0.38f
+                                val centerY = inset + width * if (index == 0) 0.5f else 0.45f
                                 translationX = centerX - sceneSize.toPx() / 2f
                                 translationY = centerY - sceneSize.toPx() / 2f
                             },
