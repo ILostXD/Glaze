@@ -452,10 +452,9 @@ private fun FluidArtworkBackground(
                 .graphicsLayer { scaleY = maxHeight.toPx() / sceneSize.toPx() }
                 .saturateArtwork().blur(viewWidth * 0.105f).artworkTwist()) {
                 Box(Modifier.matchParentSize().background(backdropColor))
-                repeat(6) { index ->
+                repeat(4) { index ->
                     val fraction = when (index) {
-                        0 -> 1.55f; 1 -> 1.10f; 2 -> 0.75f
-                        3 -> 0.43f; 4 -> 0.59f; else -> 0.50f
+                        0 -> 1.55f; 1 -> 1.10f; 2 -> 0.68f; else -> 0.55f
                     }
                     AsyncImage(
                         model = artUrl, contentDescription = null, contentScale = ContentScale.Crop,
@@ -468,27 +467,21 @@ private fun FluidArtworkBackground(
                                     0 -> 0.09f
                                     1 -> -0.24f
                                     2 -> -0.18f
-                                    3 -> 0.12f
-                                    4 -> 0.16f
-                                    else -> -0.13f
+                                    else -> 0.16f
                                 }
                                 rotationZ = radians * (180f / PI.toFloat())
                                 val orbit = radians * 0.75f
                                 val centerX = inset + when (index) {
                                     0 -> width * 0.5f
-                                    1 -> width * 0.4f
-                                    2 -> width * (0.5f + 0.25f * cos(orbit))
-                                    3 -> width * (0.55f + 0.25f * cos(orbit))
-                                    4 -> width * (0.20f + 0.18f * cos(orbit))
-                                    else -> width * (0.78f + 0.14f * cos(orbit))
+                                    1 -> width * 0.38f
+                                    2 -> width * (0.32f + 0.20f * cos(orbit))
+                                    else -> width * (0.65f + 0.18f * cos(orbit))
                                 }
                                 val centerY = inset + when (index) {
                                     0 -> width * 0.5f
-                                    1 -> width * 0.4f
-                                    2 -> width * (0.5f + 0.25f * sin(orbit))
-                                    3 -> width * (0.55f + 0.25f * sin(orbit))
-                                    4 -> width * (0.72f + 0.18f * sin(orbit))
-                                    else -> width * (0.22f + 0.14f * sin(orbit))
+                                    1 -> width * 0.45f
+                                    2 -> width * (0.12f + 0.08f * sin(orbit))
+                                    else -> width * (0.83f + 0.08f * sin(orbit))
                                 }
                                 translationX = centerX - size.width / 2f
                                 translationY = centerY - size.height / 2f
