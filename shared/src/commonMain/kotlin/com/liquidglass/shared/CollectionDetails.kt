@@ -3,6 +3,8 @@ package com.liquidglass.shared
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -10,9 +12,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -20,6 +25,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
@@ -32,6 +38,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -58,6 +65,7 @@ import com.composables.icons.materialsymbols.roundedfilled.Favorite
 import com.composables.icons.materialsymbols.roundedfilled.More_vert
 import com.composables.icons.materialsymbols.roundedfilled.Play_arrow
 import com.composables.icons.materialsymbols.roundedfilled.Playlist_add
+import com.composables.icons.materialsymbols.roundedfilled.Queue_music
 import com.composables.icons.materialsymbols.roundedfilled.Share
 import com.composables.icons.materialsymbols.roundedfilled.Shuffle
 import kotlinx.coroutines.CancellationException
@@ -76,6 +84,12 @@ internal fun AlbumCollectionScreen(
     var selectedSong by remember { mutableStateOf<Song?>(null) }
     var moreFromArtist by remember(album.id) { mutableStateOf(emptyList<Album>()) }
     var similarAlbums by remember(album.id) { mutableStateOf(emptyList<Album>()) }
+    var releaseDate by remember(album.id) { mutableStateOf(album.releaseDate) }
+    LaunchedEffect(client, album.id) {
+        try { releaseDate = client.albumDetails(album.id)?.releaseDate ?: album.releaseDate }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { }
+    }
     LaunchedEffect(client, album.id, songs) {
         val artistId = songs.firstOrNull { it.artistId != null }?.artistId
         moreFromArtist = if (artistId == null) emptyList() else
@@ -91,8 +105,8 @@ internal fun AlbumCollectionScreen(
                 Album(related.albumId!!, related.album, related.artist, related.coverArt)
             }
     }
-    CollectionSurface(album.coverArt, client, darkMode, onArtworkColor, onBack,
-        onShare = { onShare("${album.name} — ${album.artist}") }) {
+    CollectionSurface(album.name, album.coverArt, darkMode, onArtworkColor, onBack,
+        onShare = { onShare("${album.name} — ${album.artist}") }, bottomPadding = 0.dp) {
         item {
             val metadata = listOfNotNull(
                 songs.firstOrNull()?.genre?.takeIf { it.isNotBlank() },
@@ -117,13 +131,20 @@ internal fun AlbumCollectionScreen(
         }
         item { CollectionDivider() }
         items(songs, key = { "track-${it.id}" }) { song ->
-            CollectionTrackRow(song, song.track, false, onPlaySong) { selectedSong = song }
+            CollectionTrackRow(song, song.track, false, client, onPlaySong) { selectedSong = song }
         }
-        if (moreFromArtist.isNotEmpty()) item {
-            AlbumCarousel("More from ${album.artist}", moreFromArtist, client, onAlbum)
+        item {
+            AlbumFooter(songs.size, songs.sumOf { it.durationSeconds.toLong() },
+                releaseDate ?: album.year?.toString())
         }
-        if (similarAlbums.isNotEmpty()) item {
-            AlbumCarousel("Similar albums you may like", similarAlbums, client, onAlbum)
+        item {
+            Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background)) {
+                if (moreFromArtist.isNotEmpty())
+                    AlbumCarousel("More from ${album.artist}", moreFromArtist, client, onAlbum)
+                if (similarAlbums.isNotEmpty())
+                    AlbumCarousel("Similar albums you may like", similarAlbums, client, onAlbum)
+                Spacer(Modifier.height(220.dp))
+            }
         }
     }
     selectedSong?.let { song ->
@@ -153,18 +174,19 @@ internal fun PlaylistReferenceScreen(
         }.filter { it.id !in inPlaylist }.distinctBy { it.id }.take(8)
     }
     val artworkId = playlist.coverArt ?: songs.firstOrNull()?.coverArt
-    CollectionSurface(artworkId, client, darkMode, onArtworkColor, onBack,
+    CollectionSurface(playlist.name, artworkId, darkMode, onArtworkColor, onBack,
         onShare = { onShare(playlist.name) }) {
         item {
             CollectionHeader(
                 playlist.name, "Playlist",
-                "${songs.size} songs", artworkId, client,
+                "${songs.size} songs · ${formatQueueDuration(songs.sumOf { it.durationSeconds.toLong() })}",
+                artworkId, client,
             )
         }
-        item { CollectionControls(darkMode, onShuffle, onPlayAll) }
+        item { PlaylistControls(darkMode, onShuffle, onPlayAll) }
         item { CollectionDivider() }
         items(songs, key = { "track-${it.id}" }) { song ->
-            CollectionTrackRow(song, null, true, onPlaySong) { selectedSong = song }
+            CollectionTrackRow(song, null, true, client, onPlaySong) { selectedSong = song }
         }
         if (recommendations.isNotEmpty()) {
             item {
@@ -179,7 +201,8 @@ internal fun PlaylistReferenceScreen(
             items(recommendations, key = { "recommended-${it.id}" }) { song ->
                 Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically) {
-                    CollectionArtwork(client, song.coverArt, Modifier.size(52.dp))
+                    CollectionArtwork(client, song.coverArt ?: song.albumId,
+                        Modifier.size(52.dp), 160)
                     Spacer(Modifier.width(13.dp))
                     Column(Modifier.weight(1f)) {
                         Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis,
@@ -217,11 +240,14 @@ internal fun PlaylistReferenceScreen(
 
 @Composable
 private fun CollectionSurface(
-    artworkId: String?, client: SubsonicClient, darkMode: Boolean,
+    title: String, artworkId: String?, darkMode: Boolean,
     onArtworkColor: suspend (String?) -> Color,
     onBack: () -> Unit, onShare: () -> Unit,
+    bottomPadding: androidx.compose.ui.unit.Dp = 220.dp,
     content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit,
 ) {
+    val listState = rememberLazyListState()
+    val titleIsPast by remember { derivedStateOf { listState.firstVisibleItemIndex > 1 } }
     var sampled by remember(artworkId) { mutableStateOf(Color(0xFF626262)) }
     LaunchedEffect(artworkId) {
         sampled = try { onArtworkColor(artworkId) }
@@ -242,17 +268,22 @@ private fun CollectionSurface(
             )
             onDrawBehind { drawRect(brush) }
         })
-        LazyColumn(contentPadding = PaddingValues(bottom = 220.dp)) {
+        LazyColumn(state = listState, contentPadding = PaddingValues(bottom = bottomPadding)) {
             item { Spacer(Modifier.height(104.dp)) }
             content()
         }
-        Row(Modifier.fillMaxWidth().statusBarsPadding()
-            .padding(start = 12.dp, end = 12.dp, top = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween) {
+        Row(Modifier.fillMaxWidth()
+            .background(if (titleIsPast) MaterialTheme.colorScheme.background else Color.Transparent)
+            .statusBarsPadding().padding(start = 12.dp, end = 12.dp, top = 8.dp),
+            verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {
                 Icon(MaterialSymbols.RoundedFilled.Arrow_back, "Back",
                     tint = MaterialTheme.colorScheme.onBackground)
             }
+            Text(if (titleIsPast) title else "", Modifier.weight(1f).padding(horizontal = 8.dp),
+                color = MaterialTheme.colorScheme.onBackground,
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis)
             IconButton(onClick = onShare) {
                 Icon(MaterialSymbols.RoundedFilled.Share, "Share",
                     tint = MaterialTheme.colorScheme.onBackground)
@@ -289,12 +320,53 @@ private fun CollectionHeader(
 }
 
 @Composable
-private fun CollectionArtwork(client: SubsonicClient, id: String?, modifier: Modifier) {
-    val url = remember(client, id) { id?.let { client.coverArtUrl(it, 600) } }
+private fun CollectionArtwork(client: SubsonicClient, id: String?, modifier: Modifier,
+    requestSize: Int = 600) {
+    val url = remember(client, id, requestSize) { id?.let { client.coverArtUrl(it, requestSize) } }
     Box(modifier.clip(RoundedCornerShape(8.dp))
         .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.09f))) {
         if (url != null) AsyncImage(model = url, contentDescription = null,
             contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+    }
+}
+
+@Composable
+private fun PlaylistControls(darkMode: Boolean, onShuffle: () -> Unit, onPlay: () -> Unit) {
+    val ink = MaterialTheme.colorScheme.onBackground
+    Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 25.dp, bottom = 22.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(Modifier.weight(1f).height(50.dp).clip(CircleShape)
+            .background(ink.copy(alpha = if (darkMode) 0.13f else 0.09f))
+            .clickable(onClick = onShuffle),
+            horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+            Icon(MaterialSymbols.RoundedFilled.Shuffle, null, tint = ink)
+            Spacer(Modifier.width(8.dp))
+            Text("Shuffle", color = ink,
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold))
+        }
+        Row(Modifier.weight(1f).height(50.dp).clip(CircleShape)
+            .background(ink).clickable(onClick = onPlay),
+            horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+            Icon(MaterialSymbols.RoundedFilled.Play_arrow, null,
+                tint = MaterialTheme.colorScheme.background)
+            Spacer(Modifier.width(8.dp))
+            Text("Play", color = MaterialTheme.colorScheme.background,
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold))
+        }
+    }
+}
+
+@Composable
+private fun AlbumFooter(songCount: Int, durationSeconds: Long, releaseDate: String?) {
+    Column(Modifier.fillMaxWidth().padding(start = 22.dp, end = 22.dp, top = 28.dp, bottom = 38.dp)) {
+        releaseDate?.let {
+            Text(it, color = MaterialTheme.colorScheme.onBackground,
+                style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.height(3.dp))
+        }
+        Text("$songCount songs · ${formatQueueDuration(durationSeconds)}",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodyMedium)
     }
 }
 
@@ -341,16 +413,19 @@ private fun CollectionDivider() {
 
 @Composable
 private fun CollectionTrackRow(
-    song: Song, trackNumber: Int?, showArtist: Boolean,
+    song: Song, trackNumber: Int?, showArtist: Boolean, client: SubsonicClient,
     onPlay: (Song) -> Unit, onMore: () -> Unit,
 ) {
     val quiet = MaterialTheme.colorScheme.onSurfaceVariant
     Row(Modifier.fillMaxWidth().height(62.dp)
         .clickable { onPlay(song) }.padding(start = 20.dp, end = 9.dp),
         verticalAlignment = Alignment.CenterVertically) {
-        Text(trackNumber?.toString() ?: "•", color = quiet,
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.width(35.dp))
+        if (showArtist) {
+            CollectionArtwork(client, song.coverArt ?: song.albumId,
+                Modifier.size(44.dp), 160)
+            Spacer(Modifier.width(12.dp))
+        } else Text(trackNumber?.toString() ?: "", color = quiet,
+            style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(35.dp))
         Column(Modifier.weight(1f)) {
             Text(song.title, color = MaterialTheme.colorScheme.onBackground,
                 style = MaterialTheme.typography.bodyLarge,
@@ -371,7 +446,7 @@ private fun CollectionTrackRow(
             Icon(MaterialSymbols.RoundedFilled.More_vert, "Options for ${song.title}", tint = quiet)
         }
     }
-    Box(Modifier.fillMaxWidth().padding(start = 55.dp, end = 18.dp).height(1.dp)
+    Box(Modifier.fillMaxWidth().padding(start = if (showArtist) 76.dp else 55.dp, end = 18.dp).height(1.dp)
         .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f)))
 }
 
@@ -428,33 +503,45 @@ private fun CollectionSongSheet(
     ModalBottomSheet(onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         sheetGesturesEnabled = false,
-        containerColor = Color(0xFF19191C), contentColor = Color.White,
-        scrimColor = Color.Black.copy(alpha = 0.40f),
-        dragHandle = null,
-        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)) {
-        Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 22.dp, bottom = 36.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                CollectionArtwork(client, song.coverArt, Modifier.size(58.dp))
-                Spacer(Modifier.width(13.dp))
-                Column {
+        containerColor = Color.Transparent, contentColor = Color.White,
+        scrimColor = Color.Black.copy(alpha = 0.28f),
+        dragHandle = null, contentWindowInsets = { WindowInsets(0, 0, 0, 0) },
+        shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp)) {
+        PlayerSheetSurface((song.coverArt ?: song.albumId)?.let { client.coverArtUrl(it, 600) },
+            Modifier.fillMaxWidth()) {
+        Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 24.dp)) {
+            SheetHandle()
+            Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 20.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                CollectionArtwork(client, song.coverArt ?: song.albumId,
+                    Modifier.size(62.dp), 160)
+                Spacer(Modifier.width(14.dp))
+                Column(Modifier.weight(1f)) {
                     Text(song.title, color = Color.White, maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        style = MaterialTheme.typography.titleMedium)
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Medium))
                     Text(song.artist, color = Color.LightGray, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodySmall)
+                    Text(song.album, color = Color.LightGray.copy(alpha = 0.82f), maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         style = MaterialTheme.typography.bodySmall)
                 }
             }
-            Spacer(Modifier.height(22.dp))
             Text(if (showPlaylists) "ADD TO PLAYLIST" else "SONG ACTIONS",
-                color = Color.LightGray, style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier.padding(bottom = 12.dp))
+                color = Color.LightGray, style = MaterialTheme.typography.labelSmall.copy(
+                    fontWeight = FontWeight.SemiBold, letterSpacing = 1.2.sp),
+                modifier = Modifier.padding(start = 26.dp, top = 8.dp, bottom = 10.dp))
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)
+                .clip(RoundedCornerShape(24.dp))
+                .background(Color.White.copy(alpha = 0.09f)).heightIn(max = 420.dp)
+                .verticalScroll(rememberScrollState())) {
             if (showPlaylists) {
                 if (loading) CircularProgressIndicator(Modifier.padding(20.dp))
                 else if (message != null) Text(message!!, color = Color.LightGray)
                 else if (playlists.isEmpty()) Text("No playlists available", color = Color.LightGray)
                 else playlists.forEach { playlist ->
-                    SheetAction(playlist.name) {
+                    SongOptionRow(MaterialSymbols.RoundedFilled.Playlist_add, playlist.name) {
                         if (!loading) scope.launch {
                             loading = true
                             try { client.addSongToPlaylist(playlist.id, song.id); onDismiss() }
@@ -465,9 +552,14 @@ private fun CollectionSongSheet(
                     }
                 }
             } else {
-                SheetAction("Add to playlist") { showPlaylists = true }
-                SheetAction("Play next") { onPlayNext(); onDismiss() }
-                SheetAction(if (favorite) "Remove from favorites" else "Add to favorites") {
+                SongOptionRow(MaterialSymbols.RoundedFilled.Playlist_add, "Add to playlist") {
+                    showPlaylists = true
+                }
+                SongOptionRow(MaterialSymbols.RoundedFilled.Queue_music, "Play next") {
+                    onPlayNext(); onDismiss()
+                }
+                SongOptionRow(MaterialSymbols.RoundedFilled.Favorite,
+                    if (favorite) "Remove from favorites" else "Add to favorites") {
                     val next = !favorite
                     scope.launch {
                         try { client.setSongStarred(song.id, next); favorite = next; onDismiss() }
@@ -477,15 +569,8 @@ private fun CollectionSongSheet(
                 }
                 if (message != null) Text(message!!, color = Color.LightGray)
             }
+            }
         }
-    }
-}
-
-@Composable
-private fun SheetAction(label: String, onClick: () -> Unit) {
-    Box(Modifier.fillMaxWidth().height(55.dp).clip(RoundedCornerShape(14.dp))
-        .clickable(onClick = onClick).padding(horizontal = 15.dp),
-        contentAlignment = Alignment.CenterStart) {
-        Text(label, color = Color.White, style = MaterialTheme.typography.bodyLarge)
+        }
     }
 }

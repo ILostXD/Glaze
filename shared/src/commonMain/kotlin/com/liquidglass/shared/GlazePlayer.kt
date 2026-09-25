@@ -1392,7 +1392,7 @@ private fun SongOptionsSheet(
 }
 
 @Composable
-private fun SongOptionRow(icon: ImageVector, label: String, onClick: () -> Unit) {
+internal fun SongOptionRow(icon: ImageVector, label: String, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().clickable(
             interactionSource = remember { MutableInteractionSource() }, indication = null,
             role = Role.Button, onClick = onClick,
@@ -1408,7 +1408,7 @@ private fun SongOptionRow(icon: ImageVector, label: String, onClick: () -> Unit)
 }
 
 @Composable
-private fun SheetHandle() {
+internal fun SheetHandle() {
     Box(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 6.dp),
         contentAlignment = Alignment.Center) {
         Box(Modifier.size(width = 38.dp, height = 4.dp).clip(CircleShape)
@@ -1417,7 +1417,7 @@ private fun SheetHandle() {
 }
 
 @Composable
-private fun PlayerSheetSurface(artUrl: String?, modifier: Modifier, content: @Composable () -> Unit) {
+internal fun PlayerSheetSurface(artUrl: String?, modifier: Modifier, content: @Composable () -> Unit) {
     val shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp)
     Box(modifier.clip(shape).background(Color.Black)) {
         if (artUrl != null) AsyncImage(
@@ -1452,7 +1452,7 @@ internal fun activeLyricIndex(lines: List<LyricLine>, synced: Boolean, positionM
         it.text.isNotBlank() && it.startMs != null && it.startMs <= positionMs
     } else -1
 
-private fun formatQueueDuration(totalSeconds: Long): String {
+internal fun formatQueueDuration(totalSeconds: Long): String {
     val hours = totalSeconds / 3600
     val minutes = (totalSeconds % 3600) / 60
     val seconds = totalSeconds % 60

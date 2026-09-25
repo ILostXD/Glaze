@@ -68,6 +68,17 @@ class SubsonicClientTest {
         } finally { client.close() }
     }
 
+    @Test fun readsAlbumReleaseDateWhenProvided() = runBlocking {
+        val engine = MockEngine {
+            respond("""{"subsonic-response":{"status":"ok","album":{"id":"b1","name":"Album","artist":"Artist","releaseDate":{"year":2026,"month":9,"day":18}}}}""",
+                headers = headersOf(HttpHeaders.ContentType, "application/json"))
+        }
+        val client = SubsonicClient(credentials, HttpClient(engine))
+        try {
+            assertEquals("September 18, 2026", client.albumDetails("b1")?.releaseDate)
+        } finally { client.close() }
+    }
+
     @Test fun starsAndUnstarsSongById() = runBlocking {
         val endpoints = mutableListOf<String>()
         val engine = MockEngine { request ->

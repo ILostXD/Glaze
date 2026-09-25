@@ -38,6 +38,7 @@ data class Album(
     val songCount: Int = 0,
     val year: Int? = null,
     val starred: Boolean = false,
+    val releaseDate: String? = null,
 )
 data class Song(
     val id: String,
@@ -107,6 +108,8 @@ class SubsonicClient(
 
     suspend fun albumSongs(id: String): List<Song> = request("getAlbum", "id" to id)
         .obj("album").items("song").mapNotNull(::song)
+
+    suspend fun albumDetails(id: String): Album? = album(request("getAlbum", "id" to id).obj("album"))
 
     suspend fun songById(id: String): Song? = song(request("getSong", "id" to id).obj("song"))
 
@@ -218,7 +221,17 @@ private fun artist(value: JsonObject): Artist? = value.string("id")?.let {
 private fun album(value: JsonObject): Album? = value.string("id")?.let {
     Album(it, value.string("name") ?: "Unknown album", value.string("artist") ?: "Unknown artist",
         value.string("coverArt"), value.int("songCount") ?: 0, value.int("year"),
-        value.string("starred") != null)
+        value.string("starred") != null, formatReleaseDate(value.obj("releaseDate"))
+            ?: formatReleaseDate(value.obj("originalReleaseDate")))
+}
+
+private fun formatReleaseDate(value: JsonObject): String? {
+    val year = value.int("year") ?: return null
+    val month = value.int("month")?.takeIf { it in 1..12 } ?: return year.toString()
+    val name = listOf("January", "February", "March", "April", "May", "June", "July",
+        "August", "September", "October", "November", "December")[month - 1]
+    val day = value.int("day")?.takeIf { it in 1..31 }
+    return if (day == null) "$name $year" else "$name $day, $year"
 }
 private fun song(value: JsonObject): Song? = value.string("id")?.let {
     Song(it, value.string("title") ?: "Unknown title", value.string("artist") ?: "Unknown artist",
