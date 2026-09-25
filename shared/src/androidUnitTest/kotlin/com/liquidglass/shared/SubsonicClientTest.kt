@@ -138,6 +138,29 @@ class SubsonicClientTest {
         finally { client.close() }
     }
 
+    @Test fun starsAlbumsAndReadsSimilarSongs() = runBlocking {
+        val engine = MockEngine { request ->
+            val response = when (request.url.encodedPath.substringAfterLast('/')) {
+                "star.view" -> {
+                    assertEquals("album/one", request.url.parameters["albumId"])
+                    """{"subsonic-response":{"status":"ok"}}"""
+                }
+                "getSimilarSongs2.view" -> {
+                    assertEquals("song/one", request.url.parameters["id"])
+                    assertEquals("6", request.url.parameters["count"])
+                    """{"subsonic-response":{"status":"ok","similarSongs2":{"song":[{"id":"s2","title":"Related","artist":"Other","album":"Another","albumId":"a2"}]}}}"""
+                }
+                else -> error("Unexpected endpoint")
+            }
+            respond(response, headers = headersOf(HttpHeaders.ContentType, "application/json"))
+        }
+        val client = SubsonicClient(credentials, HttpClient(engine))
+        try {
+            client.setAlbumStarred("album/one", true)
+            assertEquals("a2", client.similarSongs("song/one", 6).single().albumId)
+        } finally { client.close() }
+    }
+
     @Test fun enumeratesPagedAlbumsAndParsesShuffleMetadata() = runBlocking {
         val requestedAlbums = mutableListOf<String>()
         val engine = MockEngine { request ->

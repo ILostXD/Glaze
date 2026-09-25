@@ -235,99 +235,13 @@ internal fun AlbumReferenceScreen(
     onPlayAll: () -> Unit,
     onShuffle: () -> Unit,
     onAddNext: (Song) -> Unit,
-    onAddToQueue: (Song) -> Unit,
-) {
-    val sky = rememberSky()
-    val artUrl = remember(client, album.coverArt) {
-        album.coverArt?.let { client.coverArtUrl(it, 1024) }
-    }
-    val base = MaterialTheme.colorScheme.background
-    val ink = MaterialTheme.colorScheme.onBackground
-    val quiet = MaterialTheme.colorScheme.onSurfaceVariant
-    var menuOpen by remember { mutableStateOf(false) }
-
-    Box(Modifier.fillMaxSize().background(base)) {
-        Box(Modifier.fillMaxSize().sky(sky)) {
-            AmbientArtwork(artUrl, darkMode) { sky.invalidate() }
-            LazyColumn(contentPadding = PaddingValues(bottom = 220.dp)) {
-                item {
-                    Box(Modifier.fillMaxWidth().height(455.dp)) {
-                        HeroArtwork(artUrl) { sky.invalidate() }
-                        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(
-                            0f to Color.Black.copy(alpha = 0.27f),
-                            0.34f to Color.Transparent,
-                            0.66f to Color.Black.copy(alpha = 0.08f),
-                            1f to Color.Black.copy(alpha = 0.67f),
-                        )))
-                        Column(
-                            Modifier.align(Alignment.BottomCenter)
-                                .padding(start = 22.dp, end = 22.dp, bottom = 18.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                        ) {
-                            Text(album.name, color = Color.White,
-                                style = MaterialTheme.typography.headlineLarge.copy(
-                                    fontWeight = FontWeight.SemiBold, fontSize = 36.sp, lineHeight = 39.sp),
-                                maxLines = 2, overflow = TextOverflow.Ellipsis)
-                            Spacer(Modifier.height(5.dp))
-                            Text(album.artist, color = Color.White.copy(alpha = 0.91f),
-                                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Medium),
-                                textAlign = TextAlign.Center,
-                                maxLines = 1, softWrap = false, overflow = TextOverflow.Clip,
-                                modifier = Modifier.fillMaxWidth().basicMarquee(iterations = Int.MAX_VALUE))
-                            if (album.year != null) {
-                                Spacer(Modifier.height(7.dp))
-                                Text(album.year.toString(), color = Color.White.copy(alpha = 0.7f),
-                                    style = MaterialTheme.typography.labelMedium)
-                            }
-                        }
-                    }
-                }
-                item {
-                    Row(
-                        Modifier.fillMaxWidth().padding(top = 13.dp, bottom = 20.dp),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        RoundAction(MaterialSymbols.RoundedFilled.Shuffle, "Shuffle ${album.name}", darkMode, onShuffle)
-                        Spacer(Modifier.width(20.dp))
-                        Row(
-                            Modifier.width(172.dp).height(57.dp)
-                                .clip(RoundedCornerShape(30.dp))
-                                .background(if (darkMode) Color.White else Color.Black)
-                                .clickable(onClick = onPlayAll),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(MaterialSymbols.RoundedFilled.Play_arrow, contentDescription = null,
-                                tint = if (darkMode) Color.Black else Color.White)
-                            Spacer(Modifier.width(5.dp))
-                            Text("Play", color = if (darkMode) Color.Black else Color.White,
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold))
-                        }
-                        Spacer(Modifier.width(20.dp))
-                        Box(Modifier.size(64.dp)) // Keeps the Play pill centered beneath the artwork.
-                    }
-                }
-                item {
-                    Text("${songs.size} songs", color = quiet,
-                        style = MaterialTheme.typography.labelMedium,
-                        modifier = Modifier.padding(start = 25.dp, bottom = 8.dp))
-                }
-                items(songs, key = { it.id }) { song ->
-                    AlbumTrackRow(song, ink, quiet, onPlaySong, onAddNext, onAddToQueue)
-                }
-            }
-        }
-        DetailTopBar(
-            darkMode = darkMode, onBack = onBack,
-            onMore = { menuOpen = true }, menuOpen = menuOpen,
-            onDismissMenu = { menuOpen = false },
-            menuItems = listOf("Play album" to onPlayAll, "Shuffle" to onShuffle),
-            modifier = Modifier.align(Alignment.TopCenter),
-            sky = sky,
-        )
-    }
-}
+    onShare: (String) -> Unit,
+    onArtworkColor: suspend (String?) -> Color,
+    onAlbum: (Album) -> Unit,
+) = AlbumCollectionScreen(
+    album, songs, client, darkMode, onBack, onPlaySong, onPlayAll,
+    onShuffle, onAddNext, onShare, onArtworkColor, onAlbum,
+)
 
 @Composable
 private fun AmbientArtwork(url: String?, darkMode: Boolean, onImageLoaded: () -> Unit) {
@@ -439,63 +353,5 @@ private fun DetailGlassIcon(
             .border(1.dp, Color.White.copy(alpha = 0.27f), CircleShape),
     ) {
         Icon(image, contentDescription = description, tint = Color.White)
-    }
-}
-
-@Composable
-private fun AlbumTrackRow(
-    song: Song,
-    ink: Color,
-    quiet: Color,
-    onPlaySong: (Song) -> Unit,
-    onAddNext: (Song) -> Unit,
-    onAddToQueue: (Song) -> Unit,
-) {
-    var menuOpen by remember(song.id) { mutableStateOf(false) }
-    Column {
-        Row(
-            Modifier.fillMaxWidth().clickable { onPlaySong(song) }
-                .padding(start = 23.dp, end = 15.dp, top = 9.dp, bottom = 9.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text((song.track ?: 0).takeIf { it > 0 }?.toString() ?: "–",
-                color = quiet, style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.width(27.dp))
-            Column(Modifier.weight(1f)) {
-                Text(song.title, color = ink,
-                    style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
-                    maxLines = 1, softWrap = false, overflow = TextOverflow.Clip,
-                    modifier = Modifier.fillMaxWidth().basicMarquee(iterations = Int.MAX_VALUE))
-                if (song.isExplicit || song.durationSeconds > 0) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (song.isExplicit) {
-                            ExplicitBadge(color = quiet)
-                            if (song.durationSeconds > 0) Spacer(Modifier.width(5.dp))
-                        }
-                        if (song.durationSeconds > 0) {
-                            Text("${song.durationSeconds / 60}:${(song.durationSeconds % 60).toString().padStart(2, '0')}",
-                                color = quiet, style = MaterialTheme.typography.bodySmall)
-                        }
-                    }
-                }
-            }
-            Box {
-                IconButton(onClick = { menuOpen = true }) {
-                    Icon(MaterialSymbols.RoundedFilled.More_vert, contentDescription = "Options for ${song.title}", tint = quiet)
-                }
-                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    DropdownMenuItem(text = { Text("Play next") }, onClick = {
-                        menuOpen = false
-                        onAddNext(song)
-                    })
-                    DropdownMenuItem(text = { Text("Add to queue") }, onClick = {
-                        menuOpen = false
-                        onAddToQueue(song)
-                    })
-                }
-            }
-        }
-        Box(Modifier.fillMaxWidth().padding(start = 51.dp, end = 22.dp).height(1.dp)
-            .background(ink.copy(alpha = 0.10f)))
     }
 }

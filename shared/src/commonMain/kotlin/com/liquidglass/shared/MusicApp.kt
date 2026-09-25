@@ -192,6 +192,8 @@ fun MusicApp(
     onAddNext: (Song) -> Unit,
     onAddToQueue: (Song) -> Unit,
     onShareSong: (Song) -> Unit,
+    onShareCollection: (String) -> Unit,
+    onArtworkColor: suspend (String?) -> Color,
     onRemoveFromQueue: (Int) -> Unit,
     onMoveInQueue: (Int, Int) -> Unit,
     onPlayQueueIndex: (Int) -> Unit,
@@ -290,7 +292,8 @@ fun MusicApp(
                 DisposableEffect(client) { onDispose { client.close() } }
                 LibraryScreen(client, nowPlaying, isPlaying, playerColor, playerBackdropColor, queue, currentIndex, positionMs,
                     durationMs, onPlay, onTogglePlayback, onSkipNext, onSkipPrevious, onSeek,
-                    onAddNext, onAddToQueue, onShareSong, onRemoveFromQueue, onMoveInQueue, onPlayQueueIndex,
+                    onAddNext, onAddToQueue, onShareSong, onShareCollection, onArtworkColor,
+                    onRemoveFromQueue, onMoveInQueue, onPlayQueueIndex,
                     onShuffleSongs, onDisconnect, settings, onSettingsChange, onReadPosition,
                     darkMode = darkMode,
                     onLightSystemBars = onLightSystemBars,
@@ -377,6 +380,8 @@ private fun LibraryScreen(
     onAddNext: (Song) -> Unit,
     onAddToQueue: (Song) -> Unit,
     onShareSong: (Song) -> Unit,
+    onShareCollection: (String) -> Unit,
+    onArtworkColor: suspend (String?) -> Color,
     onRemoveFromQueue: (Int) -> Unit,
     onMoveInQueue: (Int, Int) -> Unit,
     onPlayQueueIndex: (Int) -> Unit,
@@ -418,6 +423,7 @@ private fun LibraryScreen(
     var artists by remember { mutableStateOf(emptyList<Artist>()) }
     var playlists by remember { mutableStateOf(emptyList<Playlist>()) }
     var songs by remember { mutableStateOf(emptyList<Song>()) }
+    var songsRevision by remember { mutableStateOf(0) }
     var query by remember { mutableStateOf("") }
     var results by remember { mutableStateOf(SearchResults(emptyList(), emptyList(), emptyList())) }
     var loading by remember { mutableStateOf(true) }
@@ -450,7 +456,7 @@ private fun LibraryScreen(
             loading = false
         }
     }
-    LaunchedEffect(client, detail) {
+    LaunchedEffect(client, detail, songsRevision) {
         songs = emptyList()
         artistAlbums = emptyList()
         artistSongs = emptyList()
@@ -504,7 +510,7 @@ private fun LibraryScreen(
         MiniPlayerSize.Large -> 210.dp
     }
     Box(Modifier.fillMaxSize()) {
-    if (isHome || detail is Detail.ArtistPage || detail is Detail.AlbumPage) {
+    if (isHome || detail is Detail.ArtistPage || detail is Detail.AlbumPage || detail is Detail.PlaylistPage) {
         Box(Modifier.fillMaxSize()) {
             Box(Modifier.fillMaxSize().sky(chromeSky)) {
                 when (val page = detail) {
@@ -525,7 +531,20 @@ private fun LibraryScreen(
                         onPlayAll = { songs.firstOrNull()?.let { song -> onPlay(song, songs) } },
                         onShuffle = { onShuffleSongs(songs) },
                         onAddNext = onAddNext,
-                        onAddToQueue = onAddToQueue,
+                        onShare = onShareCollection,
+                        onArtworkColor = onArtworkColor,
+                        onAlbum = { openDetail(Detail.AlbumPage(it)) },
+                    )
+                    is Detail.PlaylistPage -> PlaylistReferenceScreen(
+                        page.playlist, songs, client, darkMode,
+                        onBack = ::goBack,
+                        onPlaySong = { onPlay(it, songs) },
+                        onPlayAll = { songs.firstOrNull()?.let { song -> onPlay(song, songs) } },
+                        onShuffle = { onShuffleSongs(songs) },
+                        onAddNext = onAddNext,
+                        onShare = onShareCollection,
+                        onArtworkColor = onArtworkColor,
+                        onPlaylistChanged = { songsRevision++ },
                     )
                     else -> ReferenceHomeScreen(
                         albums, freshSongs, client, darkMode, loading, error,

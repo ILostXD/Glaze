@@ -1,0 +1,491 @@
+package com.liquidglass.shared
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import coil3.compose.AsyncImage
+import com.composables.icons.materialsymbols.MaterialSymbols
+import com.composables.icons.materialsymbols.roundedfilled.Arrow_back
+import com.composables.icons.materialsymbols.roundedfilled.Favorite
+import com.composables.icons.materialsymbols.roundedfilled.More_vert
+import com.composables.icons.materialsymbols.roundedfilled.Play_arrow
+import com.composables.icons.materialsymbols.roundedfilled.Playlist_add
+import com.composables.icons.materialsymbols.roundedfilled.Share
+import com.composables.icons.materialsymbols.roundedfilled.Shuffle
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
+
+@Composable
+internal fun AlbumCollectionScreen(
+    album: Album, songs: List<Song>, client: SubsonicClient, darkMode: Boolean,
+    onBack: () -> Unit, onPlaySong: (Song) -> Unit, onPlayAll: () -> Unit,
+    onShuffle: () -> Unit, onAddNext: (Song) -> Unit,
+    onShare: (String) -> Unit, onArtworkColor: suspend (String?) -> Color,
+    onAlbum: (Album) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var favorite by remember(album.id) { mutableStateOf(album.starred) }
+    var selectedSong by remember { mutableStateOf<Song?>(null) }
+    var moreFromArtist by remember(album.id) { mutableStateOf(emptyList<Album>()) }
+    var similarAlbums by remember(album.id) { mutableStateOf(emptyList<Album>()) }
+    LaunchedEffect(client, album.id, songs) {
+        val artistId = songs.firstOrNull { it.artistId != null }?.artistId
+        moreFromArtist = if (artistId == null) emptyList() else
+            try { client.artistAlbums(artistId).filter { it.id != album.id }.take(12) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { emptyList() }
+        similarAlbums = songs.take(2).flatMap { seed ->
+            try { client.similarSongs(seed.id, 18) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { emptyList() }
+        }.filter { it.albumId != null && it.albumId != album.id && it.artist != album.artist }
+            .distinctBy { it.albumId }.take(12).map { related ->
+                Album(related.albumId!!, related.album, related.artist, related.coverArt)
+            }
+    }
+    CollectionSurface(album.coverArt, client, darkMode, onArtworkColor, onBack,
+        onShare = { onShare("${album.name} — ${album.artist}") }) {
+        item {
+            val metadata = listOfNotNull(
+                songs.firstOrNull()?.genre?.takeIf { it.isNotBlank() },
+                album.year?.toString(),
+                "Lossless".takeIf { songs.any { song -> song.suffix.equals("flac", true) } },
+            ).joinToString(" · ").ifBlank { null }
+            CollectionHeader(album.name, album.artist, metadata, album.coverArt, client)
+        }
+        item {
+            CollectionControls(
+                darkMode, onShuffle, onPlayAll,
+                favorite = favorite,
+                onFavorite = {
+                    val next = !favorite
+                    scope.launch {
+                        try { client.setAlbumStarred(album.id, next); favorite = next }
+                        catch (cancelled: CancellationException) { throw cancelled }
+                        catch (_: Exception) { }
+                    }
+                },
+            )
+        }
+        item { CollectionDivider() }
+        items(songs, key = { "track-${it.id}" }) { song ->
+            CollectionTrackRow(song, song.track, false, onPlaySong) { selectedSong = song }
+        }
+        if (moreFromArtist.isNotEmpty()) item {
+            AlbumCarousel("More from ${album.artist}", moreFromArtist, client, onAlbum)
+        }
+        if (similarAlbums.isNotEmpty()) item {
+            AlbumCarousel("Similar albums you may like", similarAlbums, client, onAlbum)
+        }
+    }
+    selectedSong?.let { song ->
+        CollectionSongSheet(song, client, onDismiss = { selectedSong = null },
+            onPlayNext = { onAddNext(song) })
+    }
+}
+
+@Composable
+internal fun PlaylistReferenceScreen(
+    playlist: Playlist, songs: List<Song>, client: SubsonicClient, darkMode: Boolean,
+    onBack: () -> Unit, onPlaySong: (Song) -> Unit, onPlayAll: () -> Unit,
+    onShuffle: () -> Unit, onAddNext: (Song) -> Unit,
+    onShare: (String) -> Unit, onArtworkColor: suspend (String?) -> Color,
+    onPlaylistChanged: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var selectedSong by remember { mutableStateOf<Song?>(null) }
+    var recommendations by remember(playlist.id) { mutableStateOf(emptyList<Song>()) }
+    var addingId by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(client, playlist.id, songs) {
+        val inPlaylist = songs.mapTo(mutableSetOf()) { it.id }
+        recommendations = songs.take(3).flatMap { seed ->
+            try { client.similarSongs(seed.id, 12) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { emptyList() }
+        }.filter { it.id !in inPlaylist }.distinctBy { it.id }.take(8)
+    }
+    val artworkId = playlist.coverArt ?: songs.firstOrNull()?.coverArt
+    CollectionSurface(artworkId, client, darkMode, onArtworkColor, onBack,
+        onShare = { onShare(playlist.name) }) {
+        item {
+            CollectionHeader(
+                playlist.name, "Playlist",
+                "${songs.size} songs", artworkId, client,
+            )
+        }
+        item { CollectionControls(darkMode, onShuffle, onPlayAll) }
+        item { CollectionDivider() }
+        items(songs, key = { "track-${it.id}" }) { song ->
+            CollectionTrackRow(song, null, true, onPlaySong) { selectedSong = song }
+        }
+        if (recommendations.isNotEmpty()) {
+            item {
+                Text("Recommended songs", color = MaterialTheme.colorScheme.onBackground,
+                    style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.SemiBold),
+                    modifier = Modifier.padding(start = 22.dp, top = 34.dp, bottom = 2.dp))
+                Text("Based on the songs in this playlist",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(start = 22.dp, bottom = 14.dp))
+            }
+            items(recommendations, key = { "recommended-${it.id}" }) { song ->
+                Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    CollectionArtwork(client, song.coverArt, Modifier.size(52.dp))
+                    Spacer(Modifier.width(13.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            color = MaterialTheme.colorScheme.onBackground)
+                        Text(song.artist, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                    IconButton(onClick = {
+                        if (addingId == null) scope.launch {
+                            addingId = song.id
+                            try {
+                                client.addSongToPlaylist(playlist.id, song.id)
+                                recommendations = recommendations.filterNot { it.id == song.id }
+                                onPlaylistChanged()
+                            } catch (cancelled: CancellationException) { throw cancelled }
+                            catch (_: Exception) { }
+                            finally { addingId = null }
+                        }
+                    }) {
+                        if (addingId == song.id) CircularProgressIndicator(Modifier.size(18.dp))
+                        else Icon(MaterialSymbols.RoundedFilled.Playlist_add,
+                            contentDescription = "Add ${song.title} to playlist",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        }
+    }
+    selectedSong?.let { song ->
+        CollectionSongSheet(song, client, onDismiss = { selectedSong = null },
+            onPlayNext = { onAddNext(song) })
+    }
+}
+
+@Composable
+private fun CollectionSurface(
+    artworkId: String?, client: SubsonicClient, darkMode: Boolean,
+    onArtworkColor: suspend (String?) -> Color,
+    onBack: () -> Unit, onShare: () -> Unit,
+    content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit,
+) {
+    var sampled by remember(artworkId) { mutableStateOf(Color(0xFF626262)) }
+    LaunchedEffect(artworkId) {
+        sampled = try { onArtworkColor(artworkId) }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { Color(0xFF626262) }
+    }
+    val accent = if (sampled == Color.Black) Color(0xFF626262) else sampled
+    val base = if (darkMode) lerp(Color(0xFF141414), accent, 0.20f)
+        else lerp(Color(0xFFF9F9F9), accent, 0.12f)
+    val glow = if (darkMode) lerp(base, accent, 0.20f)
+        else lerp(base, accent, 0.12f)
+    Box(Modifier.fillMaxSize().background(base)) {
+        Box(Modifier.fillMaxSize().drawWithCache {
+            val brush = Brush.radialGradient(
+                0f to glow, 1f to base,
+                center = Offset(size.width * 0.5f, size.height * 0.28f),
+                radius = size.width * 1.0f,
+            )
+            onDrawBehind { drawRect(brush) }
+        })
+        LazyColumn(contentPadding = PaddingValues(bottom = 220.dp)) {
+            item { Spacer(Modifier.height(104.dp)) }
+            content()
+        }
+        Row(Modifier.fillMaxWidth().statusBarsPadding()
+            .padding(start = 12.dp, end = 12.dp, top = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween) {
+            IconButton(onClick = onBack) {
+                Icon(MaterialSymbols.RoundedFilled.Arrow_back, "Back",
+                    tint = MaterialTheme.colorScheme.onBackground)
+            }
+            IconButton(onClick = onShare) {
+                Icon(MaterialSymbols.RoundedFilled.Share, "Share",
+                    tint = MaterialTheme.colorScheme.onBackground)
+            }
+        }
+    }
+}
+
+@Composable
+private fun CollectionHeader(
+    title: String, subtitle: String, metadata: String?,
+    artworkId: String?, client: SubsonicClient,
+) {
+    BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        val coverSize = (maxWidth * 0.68f).coerceAtMost(330.dp)
+        CollectionArtwork(client, artworkId, Modifier.size(coverSize))
+    }
+    Spacer(Modifier.height(22.dp))
+    Text(title, color = MaterialTheme.colorScheme.onBackground,
+        style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.SemiBold),
+        textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp))
+    Spacer(Modifier.height(3.dp))
+    Text(subtitle, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.88f),
+        style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center,
+        maxLines = 1, overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp))
+    if (metadata != null) {
+        Spacer(Modifier.height(5.dp))
+        Text(metadata, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth())
+    }
+}
+
+@Composable
+private fun CollectionArtwork(client: SubsonicClient, id: String?, modifier: Modifier) {
+    val url = remember(client, id) { id?.let { client.coverArtUrl(it, 600) } }
+    Box(modifier.clip(RoundedCornerShape(8.dp))
+        .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.09f))) {
+        if (url != null) AsyncImage(model = url, contentDescription = null,
+            contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+    }
+}
+
+@Composable
+private fun CollectionControls(
+    darkMode: Boolean, onShuffle: () -> Unit, onPlay: () -> Unit,
+    favorite: Boolean? = null, onFavorite: (() -> Unit)? = null,
+) {
+    val ink = MaterialTheme.colorScheme.onBackground
+    val quietFill = ink.copy(alpha = if (darkMode) 0.10f else 0.07f)
+    Row(Modifier.fillMaxWidth().padding(top = 25.dp, bottom = 22.dp),
+        horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(51.dp).clip(CircleShape).background(quietFill)
+            .clickable(onClick = onShuffle), contentAlignment = Alignment.Center) {
+            Icon(MaterialSymbols.RoundedFilled.Shuffle, "Shuffle", tint = ink)
+        }
+        Spacer(Modifier.width(16.dp))
+        Row(Modifier.width(168.dp).height(52.dp).clip(CircleShape)
+            .background(ink).clickable(onClick = onPlay),
+            horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+            Icon(MaterialSymbols.RoundedFilled.Play_arrow, null,
+                tint = MaterialTheme.colorScheme.background)
+            Spacer(Modifier.width(5.dp))
+            Text("Play", color = MaterialTheme.colorScheme.background,
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold))
+        }
+        Spacer(Modifier.width(16.dp))
+        if (favorite != null && onFavorite != null) {
+            Box(Modifier.size(51.dp).clip(CircleShape).background(quietFill)
+                .clickable(onClick = onFavorite), contentAlignment = Alignment.Center) {
+                Icon(MaterialSymbols.RoundedFilled.Favorite,
+                    if (favorite) "Remove favorite" else "Favorite album",
+                    tint = ink.copy(alpha = if (favorite) 1f else 0.45f))
+            }
+        } else Spacer(Modifier.size(51.dp))
+    }
+}
+
+@Composable
+private fun CollectionDivider() {
+    Box(Modifier.fillMaxWidth().padding(horizontal = 17.dp).height(1.dp)
+        .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.13f)))
+}
+
+@Composable
+private fun CollectionTrackRow(
+    song: Song, trackNumber: Int?, showArtist: Boolean,
+    onPlay: (Song) -> Unit, onMore: () -> Unit,
+) {
+    val quiet = MaterialTheme.colorScheme.onSurfaceVariant
+    Row(Modifier.fillMaxWidth().height(62.dp)
+        .clickable { onPlay(song) }.padding(start = 20.dp, end = 9.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Text(trackNumber?.toString() ?: "•", color = quiet,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.width(35.dp))
+        Column(Modifier.weight(1f)) {
+            Text(song.title, color = MaterialTheme.colorScheme.onBackground,
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 1, softWrap = false, overflow = TextOverflow.Clip,
+                modifier = Modifier.fillMaxWidth().basicMarquee(iterations = Int.MAX_VALUE))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (song.isExplicit) {
+                    ExplicitBadge(quiet)
+                    Spacer(Modifier.width(5.dp))
+                }
+                Text(if (showArtist) song.artist else
+                    "${song.durationSeconds / 60}:${(song.durationSeconds % 60).toString().padStart(2, '0')}",
+                    color = quiet, style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        IconButton(onClick = onMore) {
+            Icon(MaterialSymbols.RoundedFilled.More_vert, "Options for ${song.title}", tint = quiet)
+        }
+    }
+    Box(Modifier.fillMaxWidth().padding(start = 55.dp, end = 18.dp).height(1.dp)
+        .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f)))
+}
+
+@Composable
+private fun AlbumCarousel(
+    title: String, albums: List<Album>, client: SubsonicClient, onAlbum: (Album) -> Unit,
+) {
+    Text(title, color = MaterialTheme.colorScheme.onBackground,
+        style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.SemiBold),
+        modifier = Modifier.padding(start = 22.dp, top = 38.dp, bottom = 16.dp))
+    LazyRow(contentPadding = PaddingValues(horizontal = 20.dp),
+        horizontalArrangement = Arrangement.spacedBy(13.dp)) {
+        items(albums, key = { it.id }) { album ->
+            Column(Modifier.width(148.dp).clickable { onAlbum(album) }) {
+                CollectionArtwork(client, album.coverArt, Modifier.size(148.dp))
+                Spacer(Modifier.height(7.dp))
+                Text(album.name, color = MaterialTheme.colorScheme.onBackground,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(album.artist, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CollectionSongSheet(
+    song: Song, client: SubsonicClient,
+    onDismiss: () -> Unit, onPlayNext: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var showPlaylists by remember(song.id) { mutableStateOf(false) }
+    var playlists by remember(song.id) { mutableStateOf(emptyList<Playlist>()) }
+    var loading by remember(song.id) { mutableStateOf(false) }
+    var message by remember(song.id) { mutableStateOf<String?>(null) }
+    var favorite by remember(song.id) { mutableStateOf(song.starred) }
+    LaunchedEffect(client, song.id) {
+        try { favorite = client.songById(song.id)?.starred ?: favorite }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { }
+    }
+    LaunchedEffect(showPlaylists, client) {
+        if (showPlaylists) {
+            loading = true
+            try { playlists = client.playlists() }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { message = "Could not load playlists" }
+            finally { loading = false }
+        }
+    }
+    ModalBottomSheet(onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        sheetGesturesEnabled = false,
+        containerColor = Color(0xFF19191C), contentColor = Color.White,
+        scrimColor = Color.Black.copy(alpha = 0.40f),
+        dragHandle = null,
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)) {
+        Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 22.dp, bottom = 36.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CollectionArtwork(client, song.coverArt, Modifier.size(58.dp))
+                Spacer(Modifier.width(13.dp))
+                Column {
+                    Text(song.title, color = Color.White, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.titleMedium)
+                    Text(song.artist, color = Color.LightGray, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            Spacer(Modifier.height(22.dp))
+            Text(if (showPlaylists) "ADD TO PLAYLIST" else "SONG ACTIONS",
+                color = Color.LightGray, style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(bottom = 12.dp))
+            if (showPlaylists) {
+                if (loading) CircularProgressIndicator(Modifier.padding(20.dp))
+                else if (message != null) Text(message!!, color = Color.LightGray)
+                else if (playlists.isEmpty()) Text("No playlists available", color = Color.LightGray)
+                else playlists.forEach { playlist ->
+                    SheetAction(playlist.name) {
+                        if (!loading) scope.launch {
+                            loading = true
+                            try { client.addSongToPlaylist(playlist.id, song.id); onDismiss() }
+                            catch (cancelled: CancellationException) { throw cancelled }
+                            catch (_: Exception) { message = "Could not add to ${playlist.name}" }
+                            finally { loading = false }
+                        }
+                    }
+                }
+            } else {
+                SheetAction("Add to playlist") { showPlaylists = true }
+                SheetAction("Play next") { onPlayNext(); onDismiss() }
+                SheetAction(if (favorite) "Remove from favorites" else "Add to favorites") {
+                    val next = !favorite
+                    scope.launch {
+                        try { client.setSongStarred(song.id, next); favorite = next; onDismiss() }
+                        catch (cancelled: CancellationException) { throw cancelled }
+                        catch (_: Exception) { message = "Could not update favorite" }
+                    }
+                }
+                if (message != null) Text(message!!, color = Color.LightGray)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SheetAction(label: String, onClick: () -> Unit) {
+    Box(Modifier.fillMaxWidth().height(55.dp).clip(RoundedCornerShape(14.dp))
+        .clickable(onClick = onClick).padding(horizontal = 15.dp),
+        contentAlignment = Alignment.CenterStart) {
+        Text(label, color = Color.White, style = MaterialTheme.typography.bodyLarge)
+    }
+}

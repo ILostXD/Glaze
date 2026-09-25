@@ -37,6 +37,7 @@ data class Album(
     val coverArt: String? = null,
     val songCount: Int = 0,
     val year: Int? = null,
+    val starred: Boolean = false,
 )
 data class Song(
     val id: String,
@@ -94,6 +95,10 @@ class SubsonicClient(
         request(if (starred) "star" else "unstar", "id" to id)
     }
 
+    suspend fun setAlbumStarred(id: String, starred: Boolean) {
+        request(if (starred) "star" else "unstar", "albumId" to id)
+    }
+
     suspend fun artists(): List<Artist> = request("getArtists").obj("artists")
         .items("index").flatMap { it.items("artist") }.mapNotNull(::artist)
 
@@ -145,6 +150,10 @@ class SubsonicClient(
 
     suspend fun playlistSongs(id: String): List<Song> = request("getPlaylist", "id" to id)
         .obj("playlist").items("entry").mapNotNull(::song)
+
+    suspend fun similarSongs(id: String, count: Int = 12): List<Song> =
+        request("getSimilarSongs2", "id" to id, "count" to count.toString())
+            .obj("similarSongs2").items("song").mapNotNull(::song)
 
     suspend fun addSongToPlaylist(playlistId: String, songId: String) {
         request("updatePlaylist", "playlistId" to playlistId, "songIdToAdd" to songId)
@@ -208,7 +217,8 @@ private fun artist(value: JsonObject): Artist? = value.string("id")?.let {
 }
 private fun album(value: JsonObject): Album? = value.string("id")?.let {
     Album(it, value.string("name") ?: "Unknown album", value.string("artist") ?: "Unknown artist",
-        value.string("coverArt"), value.int("songCount") ?: 0, value.int("year"))
+        value.string("coverArt"), value.int("songCount") ?: 0, value.int("year"),
+        value.string("starred") != null)
 }
 private fun song(value: JsonObject): Song? = value.string("id")?.let {
     Song(it, value.string("title") ?: "Unknown title", value.string("artist") ?: "Unknown artist",

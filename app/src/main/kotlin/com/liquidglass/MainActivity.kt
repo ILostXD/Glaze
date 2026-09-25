@@ -261,6 +261,18 @@ class MainActivity : ComponentActivity() {
                     }
                     startActivity(Intent.createChooser(send, "Share song"))
                 },
+                onShareCollection = { message ->
+                    val send = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, message)
+                    }
+                    startActivity(Intent.createChooser(send, "Share from Glaze"))
+                },
+                onArtworkColor = { artworkId ->
+                    val account = credentials.value
+                    if (artworkId == null || account == null) Color.Black
+                    else withContext(Dispatchers.IO) { sampleArtworkColors(account, artworkId).first }
+                },
                 onRemoveFromQueue = { index -> controller?.removeMediaItem(index) },
                 onMoveInQueue = { from, to -> controller?.moveMediaItem(from, to) },
                 onPlayQueueIndex = { index ->
