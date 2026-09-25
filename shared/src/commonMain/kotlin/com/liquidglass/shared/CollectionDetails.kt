@@ -1,5 +1,8 @@
 package com.liquidglass.shared
 
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
@@ -61,6 +64,7 @@ import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import com.composables.icons.materialsymbols.MaterialSymbols
 import com.composables.icons.materialsymbols.roundedfilled.Arrow_back
+import com.composables.icons.materialsymbols.roundedfilled.Chevron_right
 import com.composables.icons.materialsymbols.roundedfilled.Favorite
 import com.composables.icons.materialsymbols.roundedfilled.More_vert
 import com.composables.icons.materialsymbols.roundedfilled.Play_arrow
@@ -77,13 +81,14 @@ internal fun AlbumCollectionScreen(
     onBack: () -> Unit, onPlaySong: (Song) -> Unit, onPlayAll: () -> Unit,
     onShuffle: () -> Unit, onAddNext: (Song) -> Unit,
     onShare: (String) -> Unit, onArtworkColor: suspend (String?) -> Color,
-    onAlbum: (Album) -> Unit,
+    onAlbum: (Album) -> Unit, onArtist: (Artist) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var favorite by remember(album.id) { mutableStateOf(album.starred) }
     var selectedSong by remember { mutableStateOf<Song?>(null) }
     var moreFromArtist by remember(album.id) { mutableStateOf(emptyList<Album>()) }
     var similarAlbums by remember(album.id) { mutableStateOf(emptyList<Album>()) }
+    val artistId = songs.firstOrNull { it.artistId != null }?.artistId
     var releaseDate by remember(album.id) { mutableStateOf(album.releaseDate) }
     LaunchedEffect(client, album.id) {
         try { releaseDate = client.albumDetails(album.id)?.releaseDate ?: album.releaseDate }
@@ -106,7 +111,7 @@ internal fun AlbumCollectionScreen(
             }
     }
     CollectionSurface(album.name, album.coverArt, darkMode, onArtworkColor, onBack,
-        onShare = { onShare("${album.name} — ${album.artist}") }, bottomPadding = 0.dp) {
+        onShare = { onShare("${album.name} — ${album.artist}") }) {
         item {
             val metadata = listOfNotNull(
                 songs.firstOrNull()?.genre?.takeIf { it.isNotBlank() },
@@ -138,12 +143,12 @@ internal fun AlbumCollectionScreen(
                 releaseDate ?: album.year?.toString())
         }
         item {
-            Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background)) {
+            Column(Modifier.fillMaxWidth()) {
                 if (moreFromArtist.isNotEmpty())
-                    AlbumCarousel("More from ${album.artist}", moreFromArtist, client, onAlbum)
+                    AlbumCarousel("More from ${album.artist}", moreFromArtist, client, onAlbum,
+                        onMore = artistId?.let { id -> { onArtist(Artist(id, album.artist)) } })
                 if (similarAlbums.isNotEmpty())
                     AlbumCarousel("Similar albums you may like", similarAlbums, client, onAlbum)
-                Spacer(Modifier.height(220.dp))
             }
         }
     }
@@ -243,7 +248,6 @@ private fun CollectionSurface(
     title: String, artworkId: String?, darkMode: Boolean,
     onArtworkColor: suspend (String?) -> Color,
     onBack: () -> Unit, onShare: () -> Unit,
-    bottomPadding: androidx.compose.ui.unit.Dp = 220.dp,
     content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit,
 ) {
     val listState = rememberLazyListState()
@@ -259,6 +263,9 @@ private fun CollectionSurface(
         else lerp(Color(0xFFF9F9F9), accent, 0.12f)
     val glow = if (darkMode) lerp(base, accent, 0.20f)
         else lerp(base, accent, 0.12f)
+    val barColor by animateColorAsState(
+        if (titleIsPast) base else Color.Transparent,
+        animationSpec = tween(260), label = "Collection bar color")
     Box(Modifier.fillMaxSize().background(base)) {
         Box(Modifier.fillMaxSize().drawWithCache {
             val brush = Brush.radialGradient(
@@ -268,22 +275,25 @@ private fun CollectionSurface(
             )
             onDrawBehind { drawRect(brush) }
         })
-        LazyColumn(state = listState, contentPadding = PaddingValues(bottom = bottomPadding)) {
+        LazyColumn(state = listState, contentPadding = PaddingValues(bottom = 220.dp)) {
             item { Spacer(Modifier.height(104.dp)) }
             content()
         }
         Row(Modifier.fillMaxWidth()
-            .background(if (titleIsPast) MaterialTheme.colorScheme.background else Color.Transparent)
+            .background(barColor)
             .statusBarsPadding().padding(start = 12.dp, end = 12.dp, top = 8.dp),
             verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {
                 Icon(MaterialSymbols.RoundedFilled.Arrow_back, "Back",
                     tint = MaterialTheme.colorScheme.onBackground)
             }
-            Text(if (titleIsPast) title else "", Modifier.weight(1f).padding(horizontal = 8.dp),
-                color = MaterialTheme.colorScheme.onBackground,
-                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Box(Modifier.weight(1f).padding(horizontal = 8.dp), contentAlignment = Alignment.Center) {
+                Crossfade(titleIsPast, animationSpec = tween(260), label = "Collection title") { visible ->
+                    if (visible) Text(title, color = MaterialTheme.colorScheme.onBackground,
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                        textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
             IconButton(onClick = onShare) {
                 Icon(MaterialSymbols.RoundedFilled.Share, "Share",
                     tint = MaterialTheme.colorScheme.onBackground)
@@ -453,10 +463,18 @@ private fun CollectionTrackRow(
 @Composable
 private fun AlbumCarousel(
     title: String, albums: List<Album>, client: SubsonicClient, onAlbum: (Album) -> Unit,
+    onMore: (() -> Unit)? = null,
 ) {
-    Text(title, color = MaterialTheme.colorScheme.onBackground,
-        style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.SemiBold),
-        modifier = Modifier.padding(start = 22.dp, top = 38.dp, bottom = 16.dp))
+    Row(Modifier.fillMaxWidth().then(if (onMore != null) Modifier.clickable(onClick = onMore)
+        else Modifier).padding(start = 22.dp, end = 20.dp, top = 38.dp, bottom = 16.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Text(title, color = MaterialTheme.colorScheme.onBackground,
+            style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.SemiBold),
+            modifier = Modifier.weight(1f))
+        if (onMore != null) Icon(MaterialSymbols.RoundedFilled.Chevron_right,
+            contentDescription = "View ${title.removePrefix("More from ")} artist profile",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
     LazyRow(contentPadding = PaddingValues(horizontal = 20.dp),
         horizontalArrangement = Arrangement.spacedBy(13.dp)) {
         items(albums, key = { it.id }) { album ->

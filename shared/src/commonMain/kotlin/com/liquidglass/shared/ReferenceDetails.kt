@@ -238,9 +238,10 @@ internal fun AlbumReferenceScreen(
     onShare: (String) -> Unit,
     onArtworkColor: suspend (String?) -> Color,
     onAlbum: (Album) -> Unit,
+    onArtist: (Artist) -> Unit,
 ) = AlbumCollectionScreen(
     album, songs, client, darkMode, onBack, onPlaySong, onPlayAll,
-    onShuffle, onAddNext, onShare, onArtworkColor, onAlbum,
+    onShuffle, onAddNext, onShare, onArtworkColor, onAlbum, onArtist,
 )
 
 @Composable

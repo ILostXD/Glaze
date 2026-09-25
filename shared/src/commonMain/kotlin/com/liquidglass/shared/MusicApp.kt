@@ -534,6 +534,7 @@ private fun LibraryScreen(
                         onShare = onShareCollection,
                         onArtworkColor = onArtworkColor,
                         onAlbum = { openDetail(Detail.AlbumPage(it)) },
+                        onArtist = { openDetail(Detail.ArtistPage(it)) },
                     )
                     is Detail.PlaylistPage -> PlaylistReferenceScreen(
                         page.playlist, songs, client, darkMode,
