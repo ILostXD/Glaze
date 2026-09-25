@@ -546,6 +546,8 @@ private fun LibraryScreen(
                         onShare = onShareCollection,
                         onArtworkColor = onArtworkColor,
                         onPlaylistChanged = { songsRevision++ },
+                        onAlbum = { openDetail(Detail.AlbumPage(it)) },
+                        onArtist = { openDetail(Detail.ArtistPage(it)) },
                     )
                     else -> ReferenceHomeScreen(
                         albums, freshSongs, client, darkMode, loading, error,

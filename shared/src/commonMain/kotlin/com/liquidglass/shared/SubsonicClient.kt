@@ -39,6 +39,7 @@ data class Album(
     val year: Int? = null,
     val starred: Boolean = false,
     val releaseDate: String? = null,
+    val artists: List<Artist> = emptyList(),
 )
 data class Song(
     val id: String,
@@ -222,7 +223,8 @@ private fun album(value: JsonObject): Album? = value.string("id")?.let {
     Album(it, value.string("name") ?: "Unknown album", value.string("artist") ?: "Unknown artist",
         value.string("coverArt"), value.int("songCount") ?: 0, value.int("year"),
         value.string("starred") != null, formatReleaseDate(value.obj("releaseDate"))
-            ?: formatReleaseDate(value.obj("originalReleaseDate")))
+            ?: formatReleaseDate(value.obj("originalReleaseDate")),
+        value.items("artists").mapNotNull(::artist))
 }
 
 private fun formatReleaseDate(value: JsonObject): String? {

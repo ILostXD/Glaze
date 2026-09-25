@@ -63,16 +63,21 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import com.composables.icons.materialsymbols.MaterialSymbols
+import com.composables.icons.materialsymbols.roundedfilled.Album
 import com.composables.icons.materialsymbols.roundedfilled.Arrow_back
 import com.composables.icons.materialsymbols.roundedfilled.Chevron_right
 import com.composables.icons.materialsymbols.roundedfilled.Favorite
 import com.composables.icons.materialsymbols.roundedfilled.More_vert
+import com.composables.icons.materialsymbols.roundedfilled.Person
 import com.composables.icons.materialsymbols.roundedfilled.Play_arrow
 import com.composables.icons.materialsymbols.roundedfilled.Playlist_add
 import com.composables.icons.materialsymbols.roundedfilled.Queue_music
 import com.composables.icons.materialsymbols.roundedfilled.Share
 import com.composables.icons.materialsymbols.roundedfilled.Shuffle
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
 @Composable
@@ -86,29 +91,54 @@ internal fun AlbumCollectionScreen(
     val scope = rememberCoroutineScope()
     var favorite by remember(album.id) { mutableStateOf(album.starred) }
     var selectedSong by remember { mutableStateOf<Song?>(null) }
-    var moreFromArtist by remember(album.id) { mutableStateOf(emptyList<Album>()) }
+    var albumArtists by remember(album.id) { mutableStateOf(album.artists) }
+    var moreFromArtists by remember(album.id) { mutableStateOf(emptyList<Pair<Artist, List<Album>>>()) }
     var similarAlbums by remember(album.id) { mutableStateOf(emptyList<Album>()) }
-    val artistId = songs.firstOrNull { it.artistId != null }?.artistId
+    var similarLoading by remember(album.id) { mutableStateOf(true) }
     var releaseDate by remember(album.id) { mutableStateOf(album.releaseDate) }
-    LaunchedEffect(client, album.id) {
-        try { releaseDate = client.albumDetails(album.id)?.releaseDate ?: album.releaseDate }
-        catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) { }
+    LaunchedEffect(client, album.id, songs) {
+        val details = try { client.albumDetails(album.id) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { null }
+        releaseDate = details?.releaseDate ?: album.releaseDate
+        val artists = (details?.artists.orEmpty().ifEmpty { album.artists }).ifEmpty {
+            try { songs.firstOrNull()?.let { client.songArtists(it.id) }.orEmpty()
+                .filter { album.artist.contains(it.name, ignoreCase = true) } }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { emptyList() }
+        }.ifEmpty {
+            songs.firstOrNull { it.artistId != null }?.let {
+                listOf(Artist(it.artistId!!, album.artist))
+            }.orEmpty()
+        }.distinctBy { it.id }
+        albumArtists = artists
+        moreFromArtists = coroutineScope {
+            artists.map { artist -> async {
+                artist to try { client.artistAlbums(artist.id)
+                    .filter { it.id != album.id }.take(12) }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { emptyList() }
+            } }.awaitAll().filter { it.second.isNotEmpty() }
+        }
     }
     LaunchedEffect(client, album.id, songs) {
-        val artistId = songs.firstOrNull { it.artistId != null }?.artistId
-        moreFromArtist = if (artistId == null) emptyList() else
-            try { client.artistAlbums(artistId).filter { it.id != album.id }.take(12) }
+        similarLoading = songs.isNotEmpty()
+        similarAlbums = emptyList()
+        var related = emptyList<Song>()
+        for (seed in songs.take(2)) {
+            val candidates = try { client.similarSongs(seed.id, 18) }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { emptyList() }
-        similarAlbums = songs.take(2).flatMap { seed ->
-            try { client.similarSongs(seed.id, 18) }
-            catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { emptyList() }
-        }.filter { it.albumId != null && it.albumId != album.id && it.artist != album.artist }
+            related = candidates.filter {
+                it.albumId != null && it.albumId != album.id && it.artist != album.artist
+            }
+            if (related.isNotEmpty()) break
+        }
+        similarAlbums = related
             .distinctBy { it.albumId }.take(12).map { related ->
                 Album(related.albumId!!, related.album, related.artist, related.coverArt)
             }
+        similarLoading = false
     }
     CollectionSurface(album.name, album.coverArt, darkMode, onArtworkColor, onBack,
         onShare = { onShare("${album.name} — ${album.artist}") }) {
@@ -144,17 +174,22 @@ internal fun AlbumCollectionScreen(
         }
         item {
             Column(Modifier.fillMaxWidth()) {
-                if (moreFromArtist.isNotEmpty())
-                    AlbumCarousel("More from ${album.artist}", moreFromArtist, client, onAlbum,
-                        onMore = artistId?.let { id -> { onArtist(Artist(id, album.artist)) } })
+                if (moreFromArtists.isNotEmpty() || similarLoading || similarAlbums.isNotEmpty())
+                    CollectionDivider()
+                moreFromArtists.forEach { (artist, albums) ->
+                    AlbumCarousel("More from ${artist.name}", albums, client, onAlbum,
+                        onMore = { onArtist(artist) })
+                }
                 if (similarAlbums.isNotEmpty())
                     AlbumCarousel("Similar albums you may like", similarAlbums, client, onAlbum)
+                else if (similarLoading) SimilarAlbumsLoading()
             }
         }
     }
     selectedSong?.let { song ->
         CollectionSongSheet(song, client, onDismiss = { selectedSong = null },
-            onPlayNext = { onAddNext(song) })
+            onPlayNext = { onAddNext(song) }, onArtist = onArtist,
+            albumArtists = albumArtists)
     }
 }
 
@@ -164,7 +199,8 @@ internal fun PlaylistReferenceScreen(
     onBack: () -> Unit, onPlaySong: (Song) -> Unit, onPlayAll: () -> Unit,
     onShuffle: () -> Unit, onAddNext: (Song) -> Unit,
     onShare: (String) -> Unit, onArtworkColor: suspend (String?) -> Color,
-    onPlaylistChanged: () -> Unit,
+    onPlaylistChanged: () -> Unit, onAlbum: (Album) -> Unit,
+    onArtist: (Artist) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var selectedSong by remember { mutableStateOf<Song?>(null) }
@@ -239,7 +275,7 @@ internal fun PlaylistReferenceScreen(
     }
     selectedSong?.let { song ->
         CollectionSongSheet(song, client, onDismiss = { selectedSong = null },
-            onPlayNext = { onAddNext(song) })
+            onPlayNext = { onAddNext(song) }, onAlbum = onAlbum, onArtist = onArtist)
     }
 }
 
@@ -265,7 +301,7 @@ private fun CollectionSurface(
         else lerp(base, accent, 0.12f)
     val barColor by animateColorAsState(
         if (titleIsPast) base else Color.Transparent,
-        animationSpec = tween(260), label = "Collection bar color")
+        animationSpec = tween(140), label = "Collection bar color")
     Box(Modifier.fillMaxSize().background(base)) {
         Box(Modifier.fillMaxSize().drawWithCache {
             val brush = Brush.radialGradient(
@@ -288,7 +324,7 @@ private fun CollectionSurface(
                     tint = MaterialTheme.colorScheme.onBackground)
             }
             Box(Modifier.weight(1f).padding(horizontal = 8.dp), contentAlignment = Alignment.Center) {
-                Crossfade(titleIsPast, animationSpec = tween(260), label = "Collection title") { visible ->
+                Crossfade(titleIsPast, animationSpec = tween(140), label = "Collection title") { visible ->
                     if (visible) Text(title, color = MaterialTheme.colorScheme.onBackground,
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
                         textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -492,14 +528,41 @@ private fun AlbumCarousel(
     }
 }
 
+@Composable
+private fun SimilarAlbumsLoading() {
+    Row(Modifier.fillMaxWidth().padding(start = 22.dp, end = 22.dp, top = 38.dp, bottom = 16.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Text("Similar albums you may like", color = MaterialTheme.colorScheme.onBackground,
+            style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.SemiBold),
+            modifier = Modifier.weight(1f))
+        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+    LazyRow(contentPadding = PaddingValues(horizontal = 20.dp),
+        horizontalArrangement = Arrangement.spacedBy(13.dp)) {
+        items(3) {
+            Box(Modifier.size(148.dp).clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.07f)))
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CollectionSongSheet(
     song: Song, client: SubsonicClient,
     onDismiss: () -> Unit, onPlayNext: () -> Unit,
+    onAlbum: ((Album) -> Unit)? = null, onArtist: (Artist) -> Unit,
+    albumArtists: List<Artist> = emptyList(),
 ) {
     val scope = rememberCoroutineScope()
     var showPlaylists by remember(song.id) { mutableStateOf(false) }
+    var showArtists by remember(song.id) { mutableStateOf(false) }
+    var artistChoices by remember(song.id) {
+        mutableStateOf(albumArtists.ifEmpty {
+            song.artistId?.let { listOf(Artist(it, song.artist)) }.orEmpty()
+        })
+    }
     var playlists by remember(song.id) { mutableStateOf(emptyList<Playlist>()) }
     var loading by remember(song.id) { mutableStateOf(false) }
     var message by remember(song.id) { mutableStateOf<String?>(null) }
@@ -508,6 +571,14 @@ private fun CollectionSongSheet(
         try { favorite = client.songById(song.id)?.starred ?: favorite }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { }
+    }
+    LaunchedEffect(client, song.id, albumArtists) {
+        artistChoices = if (albumArtists.isNotEmpty()) albumArtists else try {
+            client.songArtists(song.id)
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { emptyList() }
+        if (artistChoices.isEmpty() && song.artistId != null)
+            artistChoices = listOf(Artist(song.artistId, song.artist))
     }
     LaunchedEffect(showPlaylists, client) {
         if (showPlaylists) {
@@ -546,7 +617,8 @@ private fun CollectionSongSheet(
                         style = MaterialTheme.typography.bodySmall)
                 }
             }
-            Text(if (showPlaylists) "ADD TO PLAYLIST" else "SONG ACTIONS",
+            Text(if (showPlaylists) "ADD TO PLAYLIST" else if (showArtists) "GO TO ARTIST"
+                else "SONG ACTIONS",
                 color = Color.LightGray, style = MaterialTheme.typography.labelSmall.copy(
                     fontWeight = FontWeight.SemiBold, letterSpacing = 1.2.sp),
                 modifier = Modifier.padding(start = 26.dp, top = 8.dp, bottom = 10.dp))
@@ -554,7 +626,19 @@ private fun CollectionSongSheet(
                 .clip(RoundedCornerShape(24.dp))
                 .background(Color.White.copy(alpha = 0.09f)).heightIn(max = 420.dp)
                 .verticalScroll(rememberScrollState())) {
-            if (showPlaylists) {
+            if (showArtists) {
+                SongOptionRow(MaterialSymbols.RoundedFilled.Arrow_back, "Back to song actions") {
+                    showArtists = false
+                }
+                artistChoices.forEach { artist ->
+                    SongOptionRow(MaterialSymbols.RoundedFilled.Person, artist.name) {
+                        onDismiss(); onArtist(artist)
+                    }
+                }
+            } else if (showPlaylists) {
+                SongOptionRow(MaterialSymbols.RoundedFilled.Arrow_back, "Back to song actions") {
+                    showPlaylists = false
+                }
                 if (loading) CircularProgressIndicator(Modifier.padding(20.dp))
                 else if (message != null) Text(message!!, color = Color.LightGray)
                 else if (playlists.isEmpty()) Text("No playlists available", color = Color.LightGray)
@@ -576,6 +660,17 @@ private fun CollectionSongSheet(
                 SongOptionRow(MaterialSymbols.RoundedFilled.Queue_music, "Play next") {
                     onPlayNext(); onDismiss()
                 }
+                if (onAlbum != null && song.albumId != null)
+                    SongOptionRow(MaterialSymbols.RoundedFilled.Album, "Go to album") {
+                        onDismiss()
+                        onAlbum(Album(song.albumId, song.album, song.artist, song.coverArt))
+                    }
+                if (artistChoices.isNotEmpty())
+                    SongOptionRow(MaterialSymbols.RoundedFilled.Person, "Go to artist") {
+                        if (artistChoices.size == 1) {
+                            onDismiss(); onArtist(artistChoices.first())
+                        } else showArtists = true
+                    }
                 SongOptionRow(MaterialSymbols.RoundedFilled.Favorite,
                     if (favorite) "Remove from favorites" else "Add to favorites") {
                     val next = !favorite
