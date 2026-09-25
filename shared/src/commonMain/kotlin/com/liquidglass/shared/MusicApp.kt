@@ -1033,9 +1033,9 @@ private fun SettingsScreen(
         }
         Spacer(Modifier.height(20.dp))
         Text("Navigation style", color = ink, fontSize = 16.sp)
-        Text("A flat Spotify-like bar or Glaze’s glass pill.", color = muted, fontSize = 13.sp)
+        Text("A clean, flat bar or Glaze’s glass pill.", color = muted, fontSize = 13.sp)
         Spacer(Modifier.height(12.dp))
-        SettingsChoices(NavigationStyle.entries.map { it.name }, settings.navigationStyle.ordinal) { index ->
+        SettingsChoices(listOf("Minimal", "Glaze"), settings.navigationStyle.ordinal) { index ->
             onChange(settings.copy(navigationStyle = NavigationStyle.entries[index]))
         }
         if (settings.navigationStyle == NavigationStyle.Glaze) {

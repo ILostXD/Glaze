@@ -418,8 +418,7 @@ internal fun BoxScope.ReferenceChrome(
                     Triple(MaterialSymbols.RoundedFilled.Playlist_play, "Playlists", onPlaylists),
                     Triple(MaterialSymbols.RoundedFilled.Search, "Search", onSearch),
                 )
-                val order = if (settings.navigationStyle == NavigationStyle.Spotify)
-                    listOf(0, 3, 1, 2) else listOf(0, 1, 2, 3)
+                val order = tabs.indices
                 order.filter { showSearchInNavigation || it != 3 }.forEach { index ->
                     val tab = tabs[index]
                     Column(
