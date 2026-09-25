@@ -11,7 +11,6 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.fadeIn
@@ -202,7 +201,7 @@ internal fun ReferencePlayerScreen(
     val artUrl = remember(client, song.coverArt) { song.coverArt?.let { client.coverArtUrl(it, 1024) } }
     val accent = remember(playerColor) { artworkAccent(playerColor) }
     val glassTint = Color.White.copy(alpha = 0.05f + 0.12f * settings.glassIntensity.coerceIn(0f, 1f))
-    var view by remember(song.id) { mutableStateOf(PlayerView.Artwork) }
+    var view by remember { mutableStateOf(PlayerView.Artwork) }
     var queueOpen by remember { mutableStateOf(false) }
     var optionsOpen by remember { mutableStateOf(false) }
     var optionsView by remember(song.id) { mutableStateOf(SongOptionsView.Actions) }
@@ -378,7 +377,8 @@ internal fun ReferencePlayerScreen(
             ModalBottomSheet(
                 onDismissRequest = { optionsOpen = false },
                 sheetState = optionsSheetState,
-                containerColor = Color.Black,
+                sheetGesturesEnabled = false,
+                containerColor = Color.Transparent,
                 contentColor = Color.White,
                 scrimColor = Color.Black.copy(alpha = 0.28f),
                 shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp),
@@ -938,7 +938,47 @@ private fun QueueContents(
         Text("Swipe right to play next  ·  Swipe left to remove", color = playerSecondary,
             fontSize = 11.sp, modifier = Modifier.padding(start = 24.dp, top = 9.dp, bottom = 10.dp))
         LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp),
+            modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp)
+                .pointerInput(queue, query, currentIndex) {
+                    val handleWidth = 64.dp.toPx()
+                    detectDragGesturesAfterLongPress(
+                        onDragStart = { start ->
+                            val item = listState.layoutInfo.visibleItemsInfo.firstOrNull {
+                                start.y >= it.offset && start.y < it.offset + it.size
+                            }
+                            val index = item?.key?.toString()?.substringAfterLast(':')?.toIntOrNull()
+                            if (query.isBlank() && start.x >= size.width - handleWidth &&
+                                index != null && index > currentIndex) {
+                                draggingIndex = index
+                                dragY = 0f
+                                dragPointerY = start.y
+                                previewOrder = queue.indices.toList()
+                            }
+                        },
+                        onDrag = { change, amount ->
+                            if (draggingIndex != null) {
+                                dragY += amount.y
+                                dragPointerY = change.position.y
+                                advanceDragPreview()
+                                change.consume()
+                            }
+                        },
+                        onDragEnd = {
+                            val index = draggingIndex
+                            val target = index?.let { previewOrder?.indexOf(it) }
+                            draggingIndex = null
+                            dragY = 0f
+                            if (index != null && target != null && target >= 0 && target != index)
+                                onMove(index, target)
+                            else previewOrder = null
+                        },
+                        onDragCancel = {
+                            draggingIndex = null
+                            dragY = 0f
+                            previewOrder = null
+                        },
+                    )
+                },
             state = listState,
             contentPadding = PaddingValues(bottom = 42.dp),
             verticalArrangement = Arrangement.spacedBy(3.dp),
@@ -949,16 +989,16 @@ private fun QueueContents(
             }
             items(visibleRows, key = { "${it.value.id}:${it.index}" }) { (index, rowSong) ->
                 val dragging = draggingIndex == index
-                val dismiss = rememberSwipeToDismissBoxState(confirmValueChange = { value ->
-                    when (value) {
-                        SwipeToDismissBoxValue.StartToEnd -> if (index != currentIndex) {
+                val dismiss = rememberSwipeToDismissBoxState()
+                LaunchedEffect(dismiss.currentValue) {
+                    when (dismiss.currentValue) {
+                        SwipeToDismissBoxValue.StartToEnd -> if (index != currentIndex)
                             onMove(index, playNextQueueIndex(index, currentIndex))
-                        }
                         SwipeToDismissBoxValue.EndToStart -> if (index != currentIndex) onRemove(index)
-                        SwipeToDismissBoxValue.Settled -> Unit
+                        SwipeToDismissBoxValue.Settled -> return@LaunchedEffect
                     }
-                    false
-                })
+                    dismiss.reset()
+                }
                 SwipeToDismissBox(
                     state = dismiss,
                     modifier = Modifier.animateItem(
@@ -1000,30 +1040,7 @@ private fun QueueContents(
                     QueueRow(client, rowSong, index, dragging,
                         dismiss.dismissDirection != SwipeToDismissBoxValue.Settled,
                         query.isBlank() && index > currentIndex,
-                        currentIndex, isPlaying, onPlay,
-                        onDragStart = {
-                            draggingIndex = index
-                            dragY = 0f
-                            dragPointerY = (listState.layoutInfo.visibleItemsInfo
-                                .firstOrNull { it.key == "${rowSong.id}:$index" }?.offset ?: 0) + rowHeightPx / 2f
-                            previewOrder = matchingRows.map { it.index }
-                        },
-                        onDrag = { amount ->
-                            dragY += amount
-                            dragPointerY += amount
-                            advanceDragPreview()
-                        },
-                        onDragEnd = {
-                            val target = previewOrder?.indexOf(index) ?: index
-                            draggingIndex = null
-                            dragY = 0f
-                            if (target != index) onMove(index, target) else previewOrder = null
-                        },
-                        onDragCancel = {
-                            draggingIndex = null
-                            dragY = 0f
-                            previewOrder = null
-                        })
+                        currentIndex, isPlaying, onPlay)
                 }
             }
         }
@@ -1035,15 +1052,12 @@ private fun QueueContents(
 private fun QueueRow(
     client: SubsonicClient, song: Song, index: Int, dragging: Boolean, swiping: Boolean, canMove: Boolean,
     currentIndex: Int, isPlaying: Boolean, onPlay: (Int) -> Unit,
-    onDragStart: () -> Unit, onDrag: (Float) -> Unit,
-    onDragEnd: () -> Unit, onDragCancel: () -> Unit,
 ) {
     val rowColor by animateColorAsState(when {
         dragging || swiping -> Color.Black
         index == currentIndex -> Color.White.copy(alpha = 0.20f)
         else -> Color.White.copy(alpha = 0.10f)
-    }, animationSpec = if (dragging || swiping) snap() else tween(140),
-        label = "Queue gesture surface")
+    }, animationSpec = tween(90), label = "Queue gesture surface")
     Row(
         Modifier.fillMaxWidth().height(81.dp)
             .clip(RoundedCornerShape(14.dp))
@@ -1074,15 +1088,7 @@ private fun QueueRow(
         if (index == currentIndex) PlayingWaveform(isPlaying)
         if (canMove) {
             Icon(MaterialSymbols.RoundedFilled.Drag_handle, contentDescription = "Reorder ${song.title}",
-                tint = playerSecondary, modifier = Modifier.size(32.dp)
-                    .pointerInput(index) {
-                        detectDragGesturesAfterLongPress(
-                            onDragStart = { onDragStart() },
-                            onDrag = { change, amount -> onDrag(amount.y); change.consume() },
-                            onDragEnd = onDragEnd,
-                            onDragCancel = onDragCancel,
-                        )
-                    })
+                tint = playerSecondary, modifier = Modifier.size(32.dp))
         }
     }
 }
@@ -1227,7 +1233,7 @@ private fun SongOptionsSheet(
     }
     PlayerSheetSurface(artUrl, Modifier.fillMaxWidth()) {
     Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 24.dp)) {
-        SheetHandle()
+        SheetHandle(onDismiss = onClose)
         Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 20.dp),
             verticalAlignment = Alignment.CenterVertically) {
             CoverArt(client, song, Modifier.size(62.dp).clip(RoundedCornerShape(12.dp)))
@@ -1381,10 +1387,26 @@ private fun SongOptionRow(icon: ImageVector, label: String, onClick: () -> Unit)
 }
 
 @Composable
-private fun SheetHandle() {
-    Box(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 6.dp),
+private fun SheetHandle(onDismiss: (() -> Unit)? = null) {
+    var pullDown by remember { mutableFloatStateOf(0f) }
+    val threshold = with(LocalDensity.current) { 48.dp.toPx() }
+    Box(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 6.dp)
+        .then(if (onDismiss != null) Modifier.height(28.dp).pointerInput(Unit) {
+            detectVerticalDragGestures(
+                onVerticalDrag = { change, amount ->
+                    pullDown = (pullDown + amount).coerceAtLeast(0f)
+                    if (pullDown > 0f) change.consume()
+                },
+                onDragEnd = {
+                    if (pullDown >= threshold) onDismiss()
+                    pullDown = 0f
+                },
+                onDragCancel = { pullDown = 0f },
+            )
+        } else Modifier),
         contentAlignment = Alignment.Center) {
-        Box(Modifier.size(width = 38.dp, height = 4.dp).clip(CircleShape)
+        Box(Modifier.offset { IntOffset(0, pullDown.coerceAtMost(threshold / 2f).roundToInt()) }
+            .size(width = 38.dp, height = 4.dp).clip(CircleShape)
             .background(playerSecondary))
     }
 }
