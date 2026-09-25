@@ -5,11 +5,13 @@ import androidx.compose.animation.ExperimentalAnimationApi
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.fadeIn
@@ -52,6 +54,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
@@ -375,7 +378,7 @@ internal fun ReferencePlayerScreen(
             ModalBottomSheet(
                 onDismissRequest = { optionsOpen = false },
                 sheetState = optionsSheetState,
-                containerColor = Color.Transparent,
+                containerColor = Color.Black,
                 contentColor = Color.White,
                 scrimColor = Color.Black.copy(alpha = 0.28f),
                 shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp),
@@ -445,9 +448,9 @@ private fun FluidArtworkBackground(
                 modifier = Modifier.fillMaxSize(),
             )
             Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(
-                Color.Black.copy(alpha = 0.06f),
-                Color.Black.copy(alpha = 0.12f),
-                Color.Black.copy(alpha = 0.22f),
+                Color.Black.copy(alpha = 0.16f),
+                Color.Black.copy(alpha = 0.24f),
+                Color.Black.copy(alpha = 0.32f),
             ))))
         }
     }
@@ -699,6 +702,15 @@ private fun LyricsView(
     val dismissThreshold = with(LocalDensity.current) { 90.dp.toPx() }
     var dragDown by remember(song.id) { mutableFloatStateOf(0f) }
     val dragOffset by animateFloatAsState(dragDown, label = "Lyrics drag")
+    var closing by remember(song.id) { mutableStateOf(false) }
+    fun finishDrag() {
+        if (dragDown >= dismissThreshold) {
+            if (!closing) {
+                closing = true
+                onClose()
+            }
+        } else dragDown = 0f
+    }
     val listDismiss = remember(listState, dismissThreshold) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
@@ -716,8 +728,7 @@ private fun LyricsView(
 
             override suspend fun onPostFling(consumed: androidx.compose.ui.unit.Velocity,
                 available: androidx.compose.ui.unit.Velocity): androidx.compose.ui.unit.Velocity {
-                if (dragDown >= dismissThreshold) onClose()
-                dragDown = 0f
+                finishDrag()
                 return androidx.compose.ui.unit.Velocity.Zero
             }
         }
@@ -748,10 +759,7 @@ private fun LyricsView(
                         dragDown = (dragDown + amount).coerceAtLeast(0f)
                         if (dragDown > 0f) change.consume()
                     },
-                    onDragEnd = {
-                        if (dragDown >= dismissThreshold) onClose()
-                        dragDown = 0f
-                    },
+                    onDragEnd = { finishDrag() },
                     onDragCancel = { dragDown = 0f },
                 )
             },
@@ -847,12 +855,50 @@ private fun QueueContents(
     var previewOrder by remember(queue.map { it.id }, query) { mutableStateOf<List<Int>?>(null) }
     var draggingIndex by remember { mutableStateOf<Int?>(null) }
     var dragY by remember { mutableFloatStateOf(0f) }
+    var dragPointerY by remember { mutableFloatStateOf(0f) }
     val visibleRows = (previewOrder ?: matchingRows.map { it.index })
         .map { index -> IndexedValue(index, queue[index]) }
     LaunchedEffect(query) {
         listState.scrollToItem(if (query.isBlank()) currentIndex.coerceIn(0, (queue.size - 1).coerceAtLeast(0)) else 0)
     }
     val rowHeightPx = with(LocalDensity.current) { 84.dp.toPx() }
+    val edgePx = with(LocalDensity.current) { 72.dp.toPx() }
+    val scrollStepPx = with(LocalDensity.current) { 14.dp.toPx() }
+    fun advanceDragPreview() {
+        val index = draggingIndex ?: return
+        var order = previewOrder ?: return
+        var position = order.indexOf(index)
+        if (position < 0) return
+        while (dragY > rowHeightPx / 2f && position < order.lastIndex) {
+            order = queuePreviewMoved(order, position, position + 1)
+            position++
+            dragY -= rowHeightPx
+        }
+        while (dragY < -rowHeightPx / 2f && position > currentIndex + 1) {
+            order = queuePreviewMoved(order, position, position - 1)
+            position--
+            dragY += rowHeightPx
+        }
+        previewOrder = order
+    }
+    LaunchedEffect(draggingIndex) {
+        while (draggingIndex != null) {
+            val layout = listState.layoutInfo
+            val step = when {
+                dragPointerY < layout.viewportStartOffset + edgePx -> -scrollStepPx
+                dragPointerY > layout.viewportEndOffset - edgePx -> scrollStepPx
+                else -> 0f
+            }
+            if (step != 0f) {
+                val scrolled = listState.scrollBy(step)
+                if (scrolled != 0f) {
+                    dragY += scrolled
+                    advanceDragPreview()
+                }
+            }
+            delay(16)
+        }
+    }
     val remaining = queue.drop(currentIndex.coerceAtLeast(0))
     val duration = remaining.sumOf { it.durationSeconds.toLong() }
     PlayerSheetSurface(artUrl, Modifier.fillMaxSize()) {
@@ -951,28 +997,21 @@ private fun QueueContents(
                         }
                     },
                 ) {
-                    QueueRow(client, rowSong, index, dragging, query.isBlank() && index > currentIndex,
+                    QueueRow(client, rowSong, index, dragging,
+                        dismiss.dismissDirection != SwipeToDismissBoxValue.Settled,
+                        query.isBlank() && index > currentIndex,
                         currentIndex, isPlaying, onPlay,
                         onDragStart = {
                             draggingIndex = index
                             dragY = 0f
+                            dragPointerY = (listState.layoutInfo.visibleItemsInfo
+                                .firstOrNull { it.key == "${rowSong.id}:$index" }?.offset ?: 0) + rowHeightPx / 2f
                             previewOrder = matchingRows.map { it.index }
                         },
                         onDrag = { amount ->
                             dragY += amount
-                            var order = previewOrder ?: return@QueueRow
-                            var position = order.indexOf(index)
-                            while (dragY > rowHeightPx / 2f && position < order.lastIndex) {
-                                order = queuePreviewMoved(order, position, position + 1)
-                                position++
-                                dragY -= rowHeightPx
-                            }
-                            while (dragY < -rowHeightPx / 2f && position > currentIndex + 1) {
-                                order = queuePreviewMoved(order, position, position - 1)
-                                position--
-                                dragY += rowHeightPx
-                            }
-                            previewOrder = order
+                            dragPointerY += amount
+                            advanceDragPreview()
                         },
                         onDragEnd = {
                             val target = previewOrder?.indexOf(index) ?: index
@@ -994,19 +1033,21 @@ private fun QueueContents(
 
 @Composable
 private fun QueueRow(
-    client: SubsonicClient, song: Song, index: Int, dragging: Boolean, canMove: Boolean,
+    client: SubsonicClient, song: Song, index: Int, dragging: Boolean, swiping: Boolean, canMove: Boolean,
     currentIndex: Int, isPlaying: Boolean, onPlay: (Int) -> Unit,
     onDragStart: () -> Unit, onDrag: (Float) -> Unit,
     onDragEnd: () -> Unit, onDragCancel: () -> Unit,
 ) {
+    val rowColor by animateColorAsState(when {
+        dragging || swiping -> Color.Black
+        index == currentIndex -> Color.White.copy(alpha = 0.20f)
+        else -> Color.White.copy(alpha = 0.10f)
+    }, animationSpec = if (dragging || swiping) snap() else tween(140),
+        label = "Queue gesture surface")
     Row(
         Modifier.fillMaxWidth().height(81.dp)
             .clip(RoundedCornerShape(14.dp))
-            .background(when {
-                dragging -> Color.Black
-                index == currentIndex -> Color.White.copy(alpha = 0.20f)
-                else -> Color.White.copy(alpha = 0.10f)
-            })
+            .background(rowColor)
             .clickable { onPlay(index) }.padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1022,10 +1063,13 @@ private fun QueueRow(
                     ExplicitBadge(playerSecondary)
                     Spacer(Modifier.width(5.dp))
                 }
-                Text("${song.album} • ${song.artist}", color = playerSecondary,
+                Text(song.artist, color = playerSecondary,
                     fontSize = 13.sp, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip,
                     modifier = Modifier.weight(1f, fill = false).basicMarquee(iterations = Int.MAX_VALUE))
             }
+            if (song.album.isNotBlank()) Text(song.album, color = playerSecondary.copy(alpha = 0.82f),
+                fontSize = 11.sp, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip,
+                modifier = Modifier.fillMaxWidth().basicMarquee(iterations = Int.MAX_VALUE))
         }
         if (index == currentIndex) PlayingWaveform(isPlaying)
         if (canMove) {
@@ -1197,10 +1241,13 @@ private fun SongOptionsSheet(
                         ExplicitBadge(playerSecondary)
                         Spacer(Modifier.width(5.dp))
                     }
-                    Text("${song.album} • ${song.artist}", color = playerSecondary, fontSize = 13.sp,
+                    Text(song.artist, color = playerSecondary, fontSize = 13.sp,
                         maxLines = 1, softWrap = false, overflow = TextOverflow.Clip,
                         modifier = Modifier.weight(1f, fill = false).basicMarquee(iterations = Int.MAX_VALUE))
                 }
+                if (song.album.isNotBlank()) Text(song.album, color = playerSecondary.copy(alpha = 0.82f),
+                    fontSize = 12.sp, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip,
+                    modifier = Modifier.fillMaxWidth().basicMarquee(iterations = Int.MAX_VALUE))
             }
         }
         if (view == SongOptionsView.Actions) {
