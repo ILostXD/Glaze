@@ -84,7 +84,7 @@ internal fun ArtistReferenceScreen(
     Box(Modifier.fillMaxSize().background(base)) {
         Box(Modifier.fillMaxSize().sky(sky)) {
             AmbientArtwork(artUrl, darkMode) { sky.invalidate() }
-            LazyColumn(contentPadding = PaddingValues(bottom = 170.dp)) {
+            LazyColumn(contentPadding = PaddingValues(bottom = 220.dp)) {
                 item {
                     Box(Modifier.fillMaxWidth().height(390.dp)) {
                         HeroArtwork(artUrl) { sky.invalidate() }
@@ -249,7 +249,7 @@ internal fun AlbumReferenceScreen(
     Box(Modifier.fillMaxSize().background(base)) {
         Box(Modifier.fillMaxSize().sky(sky)) {
             AmbientArtwork(artUrl, darkMode) { sky.invalidate() }
-            LazyColumn(contentPadding = PaddingValues(bottom = 170.dp)) {
+            LazyColumn(contentPadding = PaddingValues(bottom = 220.dp)) {
                 item {
                     Box(Modifier.fillMaxWidth().height(455.dp)) {
                         HeroArtwork(artUrl) { sky.invalidate() }

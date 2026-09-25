@@ -2,6 +2,7 @@ package com.liquidglass.shared
 
 import com.composables.icons.materialsymbols.MaterialSymbols
 import com.composables.icons.materialsymbols.roundedfilled.Home
+import com.composables.icons.materialsymbols.roundedfilled.Arrow_back
 import com.composables.icons.materialsymbols.roundedfilled.Library_music
 import com.composables.icons.materialsymbols.roundedfilled.More_horiz
 import com.composables.icons.materialsymbols.roundedfilled.Pause
@@ -11,6 +12,7 @@ import com.composables.icons.materialsymbols.roundedfilled.Search
 import com.composables.icons.materialsymbols.roundedfilled.Skip_next
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.background
@@ -46,8 +48,10 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -58,6 +62,8 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
@@ -71,6 +77,7 @@ import com.liquidglass.shared.resources.glaze_wordmark
 import com.skydoves.cloudy.Sky
 import com.skydoves.cloudy.cloudy
 import org.jetbrains.compose.resources.painterResource
+import kotlinx.coroutines.delay
 
 @Composable
 internal fun ReferenceHomeScreen(
@@ -95,32 +102,10 @@ internal fun ReferenceHomeScreen(
     Box(Modifier.fillMaxSize().background(surface)) {
         LazyColumn(
             Modifier.fillMaxSize().statusBarsPadding(),
-            contentPadding = PaddingValues(top = 20.dp, bottom = 188.dp),
+            contentPadding = PaddingValues(top = 20.dp, bottom = 220.dp),
         ) {
             item {
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 22.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Image(
-                        painter = painterResource(Res.drawable.glaze_wordmark),
-                        contentDescription = "Glaze",
-                        modifier = Modifier.weight(1f).height(43.dp),
-                        alignment = Alignment.CenterStart,
-                        colorFilter = ColorFilter.tint(ink),
-                    )
-                    Box(
-                        Modifier.size(44.dp).clip(CircleShape)
-                            .background(if (darkMode) Color.White else Color.Black)
-                            .border(1.dp, ink.copy(alpha = 0.25f), CircleShape)
-                            .clickable(onClick = onSettings),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(client.credentials.username.take(2).uppercase(),
-                            color = if (darkMode) Color.Black else Color.White,
-                            fontSize = 15.sp, fontWeight = FontWeight.W600)
-                    }
-                }
+                AppToolbar(null, client.credentials.username, darkMode, onSettings)
             }
             if (error != null) item {
                 Text(error, color = ink, fontSize = 13.sp,
@@ -220,6 +205,35 @@ internal fun ReferenceHomeScreen(
 }
 
 @Composable
+internal fun AppToolbar(title: String?, username: String, darkMode: Boolean,
+                        onSettings: (() -> Unit)?, onBack: (() -> Unit)? = null) {
+    val ink = MaterialTheme.colorScheme.onBackground
+    Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp).height(44.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        if (onBack != null) IconButton(onClick = onBack) {
+            Icon(MaterialSymbols.RoundedFilled.Arrow_back, "Back", tint = ink)
+        }
+        if (title == null) Image(
+            painter = painterResource(Res.drawable.glaze_wordmark),
+            contentDescription = "Glaze",
+            modifier = Modifier.weight(1f).height(43.dp),
+            alignment = Alignment.CenterStart,
+            colorFilter = ColorFilter.tint(ink),
+        ) else Text(title, modifier = Modifier.weight(1f), color = ink,
+            fontSize = 29.sp, fontWeight = FontWeight.SemiBold,
+            maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Box(Modifier.size(44.dp).clip(CircleShape)
+            .background(if (darkMode) Color.White else Color.Black)
+            .border(1.dp, ink.copy(alpha = 0.25f), CircleShape)
+            .then(if (onSettings != null) Modifier.clickable(onClick = onSettings) else Modifier),
+            contentAlignment = Alignment.Center) {
+            Text(username.take(2).uppercase(), color = if (darkMode) Color.Black else Color.White,
+                fontSize = 15.sp, fontWeight = FontWeight.W600)
+        }
+    }
+}
+
+@Composable
 private fun HomeSongRow(
     song: Song, client: SubsonicClient,
     onClick: () -> Unit, onAddNext: () -> Unit, onAddToQueue: () -> Unit,
@@ -274,6 +288,9 @@ internal fun BoxScope.ReferenceChrome(
     darkMode: Boolean,
     selectedTab: Int,
     settings: AppSettings,
+    positionMs: Long,
+    durationMs: Long,
+    onReadPosition: () -> Pair<Long, Long>,
     onHome: () -> Unit,
     onArtists: () -> Unit,
     onPlaylists: () -> Unit,
@@ -298,14 +315,37 @@ internal fun BoxScope.ReferenceChrome(
     var menuOpen by remember { mutableStateOf(false) }
     var swipeX by remember(song?.id) { mutableFloatStateOf(0f) }
     val swipeThreshold = with(LocalDensity.current) { settings.gestures.sensitivityDp.dp.toPx() }
+    val miniHeight = when (settings.miniPlayerSize) {
+        MiniPlayerSize.Small -> 52.dp
+        MiniPlayerSize.Medium -> 62.dp
+        MiniPlayerSize.Large -> 78.dp
+    }
+    val coverSize = when (settings.miniPlayerSize) {
+        MiniPlayerSize.Small -> 38.dp
+        MiniPlayerSize.Medium -> 47.dp
+        MiniPlayerSize.Large -> 68.dp
+    }
+    var livePosition by remember(song?.id) { mutableLongStateOf(positionMs) }
+    LaunchedEffect(positionMs) { livePosition = positionMs }
+    LaunchedEffect(song?.id, isPlaying, settings.miniPlayerSize) {
+        if (song != null && settings.miniPlayerSize == MiniPlayerSize.Large) {
+            do {
+                livePosition = onReadPosition().first
+                delay(400)
+            } while (isPlaying)
+        }
+    }
+    val totalDuration = durationMs.takeIf { it > 0 } ?: ((song?.durationSeconds ?: 0) * 1000L)
+    val progress = if (totalDuration > 0) (livePosition.toFloat() / totalDuration).coerceIn(0f, 1f) else 0f
+    val navHeight = if (settings.navigationLabels) 67.dp else 57.dp
     Column(
         Modifier.fillMaxWidth().align(Alignment.BottomCenter)
             .navigationBarsPadding().padding(horizontal = 17.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         if (song != null) {
             Row(
-                Modifier.fillMaxWidth().height(62.dp)
+                Modifier.fillMaxWidth().height(miniHeight)
                     .shadow(18.dp, pill).clip(pill)
                     .cloudy(sky = sky, radius = 44, tint = tint, shape = pill)
                     .background(if (darkMode) Color.White.copy(alpha = 0.06f)
@@ -329,10 +369,12 @@ internal fun BoxScope.ReferenceChrome(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 AlbumImage(client, song.coverArt,
-                    Modifier.size(47.dp).clip(RoundedCornerShape(12.dp)))
+                    Modifier.size(coverSize).clip(if (settings.miniPlayerSize == MiniPlayerSize.Large)
+                        CircleShape else RoundedCornerShape(12.dp)))
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(song.title, color = ink, fontSize = 13.sp,
+                    Text(song.title, color = ink,
+                        fontSize = if (settings.miniPlayerSize == MiniPlayerSize.Large) 16.sp else 13.sp,
                         fontWeight = FontWeight.W600, maxLines = 1,
                         softWrap = false, overflow = TextOverflow.Clip,
                         modifier = Modifier.fillMaxWidth().basicMarquee(iterations = Int.MAX_VALUE))
@@ -346,14 +388,30 @@ internal fun BoxScope.ReferenceChrome(
                             modifier = Modifier.weight(1f).basicMarquee(iterations = Int.MAX_VALUE))
                     }
                 }
-                IconButton(onClick = onToggle) {
-                    Icon(if (isPlaying) MaterialSymbols.RoundedFilled.Pause else MaterialSymbols.RoundedFilled.Play_arrow,
-                        if (isPlaying) "Pause" else "Play", tint = ink,
-                        modifier = Modifier.size(27.dp))
-                }
-                IconButton(onClick = onNext) {
-                    Icon(MaterialSymbols.RoundedFilled.Skip_next, "Next", tint = ink,
-                        modifier = Modifier.size(27.dp))
+                if (settings.miniPlayerSize == MiniPlayerSize.Large) {
+                    Box(Modifier.size(50.dp), contentAlignment = Alignment.Center) {
+                        Canvas(Modifier.size(47.dp)) {
+                            val stroke = 2.5.dp.toPx()
+                            drawCircle(ink.copy(alpha = 0.26f), style = Stroke(stroke))
+                            drawArc(ink, startAngle = -90f, sweepAngle = 360f * progress,
+                                useCenter = false, style = Stroke(stroke, cap = StrokeCap.Round))
+                        }
+                        IconButton(onClick = onToggle) {
+                            Icon(if (isPlaying) MaterialSymbols.RoundedFilled.Pause else MaterialSymbols.RoundedFilled.Play_arrow,
+                                if (isPlaying) "Pause" else "Play", tint = ink,
+                                modifier = Modifier.size(27.dp))
+                        }
+                    }
+                } else {
+                    IconButton(onClick = onToggle) {
+                        Icon(if (isPlaying) MaterialSymbols.RoundedFilled.Pause else MaterialSymbols.RoundedFilled.Play_arrow,
+                            if (isPlaying) "Pause" else "Play", tint = ink,
+                            modifier = Modifier.size(27.dp))
+                    }
+                    if (settings.miniPlayerSize == MiniPlayerSize.Medium) IconButton(onClick = onNext) {
+                        Icon(MaterialSymbols.RoundedFilled.Skip_next, "Next", tint = ink,
+                            modifier = Modifier.size(27.dp))
+                    }
                 }
             }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
@@ -367,21 +425,31 @@ internal fun BoxScope.ReferenceChrome(
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
             Row(
-                Modifier.weight(1f).height(67.dp).shadow(18.dp, pill).clip(pill)
-                    .cloudy(sky = sky, radius = 48, tint = tint, shape = pill)
-                    .background(Color.White.copy(alpha = if (darkMode) 0.04f else 0.11f))
-                    .border(1.dp, sheen, pill).padding(5.dp),
+                Modifier.weight(1f).height(navHeight)
+                    .then(if (settings.navigationStyle == NavigationStyle.Glaze)
+                        Modifier.shadow(18.dp, pill).clip(pill)
+                            .cloudy(sky = sky, radius = 48, tint = tint, shape = pill)
+                            .background(Color.White.copy(alpha = if (darkMode) 0.04f else 0.11f))
+                            .border(1.dp, sheen, pill).padding(5.dp)
+                    else Modifier.background(Brush.verticalGradient(listOf(
+                        Color.Transparent,
+                        MaterialTheme.colorScheme.background.copy(alpha = 0.90f),
+                    )))),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 val tabs = listOf(
                     Triple(MaterialSymbols.RoundedFilled.Home, "Home", onHome),
                     Triple(MaterialSymbols.RoundedFilled.Library_music, "Artists", onArtists),
                     Triple(MaterialSymbols.RoundedFilled.Playlist_play, "Playlists", onPlaylists),
+                    Triple(MaterialSymbols.RoundedFilled.Search, "Search", onSearch),
                 )
-                tabs.forEachIndexed { index, tab ->
+                val order = if (settings.navigationStyle == NavigationStyle.Spotify)
+                    listOf(0, 3, 1, 2) else listOf(0, 1, 2, 3)
+                order.filter { settings.searchInNavigation || it != 3 }.forEach { index ->
+                    val tab = tabs[index]
                     Column(
                         Modifier.weight(1f).fillMaxSize().clip(pill)
-                            .background(if (selectedTab == index)
+                            .background(if (settings.navigationStyle == NavigationStyle.Glaze && selectedTab == index)
                                 (if (darkMode) Color.White.copy(alpha = 0.15f)
                                  else Color.Black.copy(alpha = 0.10f))
                                 else Color.Transparent)
@@ -390,21 +458,23 @@ internal fun BoxScope.ReferenceChrome(
                         verticalArrangement = Arrangement.Center,
                     ) {
                         Icon(tab.first, tab.second,
-                            tint = ink,
+                            tint = if (selectedTab == index) ink else muted,
                             modifier = Modifier.size(23.dp))
-                        Text(tab.second, color = ink,
-                            fontSize = 9.sp, fontWeight = FontWeight.W500)
+                        if (settings.navigationLabels) Text(tab.second,
+                            color = if (selectedTab == index) ink else muted,
+                            fontSize = 10.sp, fontWeight = FontWeight.W500)
                     }
                 }
             }
-            Box(
-                Modifier.size(67.dp).shadow(18.dp, CircleShape).clip(CircleShape)
+            if (!settings.searchInNavigation) Box(
+                Modifier.size(navHeight).shadow(18.dp, CircleShape).clip(CircleShape)
                     .cloudy(sky = sky, radius = 48, tint = tint, shape = CircleShape)
                     .background(Color.White.copy(alpha = if (darkMode) 0.04f else 0.11f))
                     .border(1.dp, sheen, CircleShape).clickable(onClick = onSearch),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(MaterialSymbols.RoundedFilled.Search, "Search", tint = ink, modifier = Modifier.size(27.dp))
+                Icon(MaterialSymbols.RoundedFilled.Search, "Search",
+                    tint = if (selectedTab == 3) ink else muted, modifier = Modifier.size(27.dp))
             }
         }
     }

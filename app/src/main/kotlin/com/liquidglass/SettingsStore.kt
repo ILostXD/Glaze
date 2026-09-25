@@ -3,6 +3,8 @@ package com.liquidglass
 import android.content.Context
 import com.liquidglass.shared.AppSettings
 import com.liquidglass.shared.GestureConfig
+import com.liquidglass.shared.MiniPlayerSize
+import com.liquidglass.shared.NavigationStyle
 import com.liquidglass.shared.ThemePreference
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -25,6 +27,14 @@ class SettingsStore @Inject constructor(@ApplicationContext context: Context) {
             themePreference = runCatching {
                 ThemePreference.valueOf(prefs.getString("theme_preference", null) ?: defaults.themePreference.name)
             }.getOrDefault(defaults.themePreference),
+            miniPlayerSize = runCatching {
+                MiniPlayerSize.valueOf(prefs.getString("mini_player_size", null) ?: defaults.miniPlayerSize.name)
+            }.getOrDefault(defaults.miniPlayerSize),
+            navigationStyle = runCatching {
+                NavigationStyle.valueOf(prefs.getString("navigation_style", null) ?: defaults.navigationStyle.name)
+            }.getOrDefault(defaults.navigationStyle),
+            searchInNavigation = prefs.getBoolean("search_in_navigation", defaults.searchInNavigation),
+            navigationLabels = prefs.getBoolean("navigation_labels", defaults.navigationLabels),
         )
     }
 
@@ -37,6 +47,10 @@ class SettingsStore @Inject constructor(@ApplicationContext context: Context) {
             .putFloat("glass_intensity", settings.glassIntensity.coerceIn(0f, 1f))
             .putBoolean("smart_shuffle", settings.smartShuffle)
             .putString("theme_preference", settings.themePreference.name)
+            .putString("mini_player_size", settings.miniPlayerSize.name)
+            .putString("navigation_style", settings.navigationStyle.name)
+            .putBoolean("search_in_navigation", settings.searchInNavigation)
+            .putBoolean("navigation_labels", settings.navigationLabels)
             .apply()
     }
 }

@@ -151,9 +151,15 @@ data class AppSettings(
     val glassIntensity: Float = 0.5f,
     val smartShuffle: Boolean = true,
     val themePreference: ThemePreference = ThemePreference.System,
+    val miniPlayerSize: MiniPlayerSize = MiniPlayerSize.Medium,
+    val navigationStyle: NavigationStyle = NavigationStyle.Spotify,
+    val searchInNavigation: Boolean = true,
+    val navigationLabels: Boolean = true,
 )
 
 enum class ThemePreference { System, Light, Dark }
+enum class MiniPlayerSize { Small, Medium, Large }
+enum class NavigationStyle { Spotify, Glaze }
 
 private enum class Tab { Home, Artists, Playlists, Search }
 private sealed interface Detail {
@@ -490,11 +496,16 @@ private fun LibraryScreen(
         }
     }
 
+    val chromeSky = rememberSky()
+    val chromeSpace = if (nowPlaying == null) 98.dp else when (settings.miniPlayerSize) {
+        MiniPlayerSize.Small -> 158.dp
+        MiniPlayerSize.Medium -> 172.dp
+        MiniPlayerSize.Large -> 190.dp
+    }
     Box(Modifier.fillMaxSize()) {
     if (isHome || detail is Detail.ArtistPage || detail is Detail.AlbumPage) {
-        val sky = rememberSky()
         Box(Modifier.fillMaxSize()) {
-            Box(Modifier.fillMaxSize().sky(sky)) {
+            Box(Modifier.fillMaxSize().sky(chromeSky)) {
                 when (val page = detail) {
                     is Detail.ArtistPage -> ArtistReferenceScreen(
                         page.artist, artistAlbums, artistSongs, client, darkMode,
@@ -526,48 +537,26 @@ private fun LibraryScreen(
                     )
                 }
             }
-            ReferenceChrome(
-                sky, client, nowPlaying, isPlaying, darkMode,
-                selectedTab = when (tab) {
-                    Tab.Home -> 0; Tab.Artists -> 1; Tab.Playlists -> 2; Tab.Search -> -1
-                },
-                settings = settings,
-                onHome = { selectTab(Tab.Home) },
-                onArtists = { selectTab(Tab.Artists) },
-                onPlaylists = { selectTab(Tab.Playlists) },
-                onSearch = { selectTab(Tab.Search) },
-                onExpandPlayer = { playerExpanded = true },
-                onToggle = onTogglePlayback,
-                onNext = onSkipNext,
-                onPrevious = onSkipPrevious,
-                onAddNext = onAddNext,
-                onAddToQueue = onAddToQueue,
-            )
         }
     } else {
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
-        .statusBarsPadding().navigationBarsPadding().padding(top = 10.dp)) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (detail != null) IconButton(onClick = ::goBack) {
-                Icon(MaterialSymbols.RoundedFilled.Arrow_back, "Back", tint = ink)
-            }
-            Text(
-                when (val page = detail) {
-                    is Detail.ArtistPage -> page.artist.name
-                    is Detail.AlbumPage -> page.album.name
-                    is Detail.PlaylistPage -> page.playlist.name
-                    Detail.QueuePage -> "Queue"
-                    Detail.SettingsPage -> "Settings"
-                    null -> when (tab) { Tab.Home -> "Listen Now"; Tab.Artists -> "Artists";
-                        Tab.Playlists -> "Playlists"; Tab.Search -> "Search" }
-                },
-                modifier = Modifier.weight(1f), color = ink, fontSize = 30.sp, fontWeight = FontWeight.SemiBold,
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
-            )
-            if (detail == null) IconButton(onClick = { openDetail(Detail.SettingsPage) }) {
-                Icon(MaterialSymbols.RoundedFilled.Settings, "Settings", tint = muted)
-            }
-        }
+        .sky(chromeSky).statusBarsPadding().navigationBarsPadding()
+        .padding(top = 20.dp, bottom = chromeSpace)) {
+        AppToolbar(
+            title = when (val page = detail) {
+                is Detail.ArtistPage -> page.artist.name
+                is Detail.AlbumPage -> page.album.name
+                is Detail.PlaylistPage -> page.playlist.name
+                Detail.QueuePage -> "Queue"
+                Detail.SettingsPage -> "Settings"
+                null -> when (tab) { Tab.Home -> "Listen Now"; Tab.Artists -> "Artists";
+                    Tab.Playlists -> "Playlists"; Tab.Search -> "Search" }
+            },
+            username = client.credentials.username,
+            darkMode = darkMode,
+            onSettings = if (detail == Detail.SettingsPage) null else ({ openDetail(Detail.SettingsPage) }),
+            onBack = if (detail != null) ::goBack else null,
+        )
         if (error != null) Text(error!!, color = MaterialTheme.colorScheme.error,
             modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
 
@@ -594,39 +583,28 @@ private fun LibraryScreen(
                 }
             }
         }
-        AnimatedVisibility(nowPlaying != null) {
-            if (nowPlaying != null) MiniPlayer(client, nowPlaying, isPlaying,
-                onTogglePlayback, onSkipNext, onSkipPrevious,
-                onExpand = { playerExpanded = true },
-                onQueue = { openDetail(Detail.QueuePage) },
-                onAddNext = { onAddNext(nowPlaying) },
-                onAddToQueue = { onAddToQueue(nowPlaying) },
-                onGoAlbum = {
-                    nowPlaying.albumId?.let { openDetail(Detail.AlbumPage(
-                        Album(it, nowPlaying.album, nowPlaying.artist, nowPlaying.coverArt))) }
-                },
-                onGoArtist = {
-                    nowPlaying.artistId?.let { openDetail(Detail.ArtistPage(
-                        Artist(it, nowPlaying.artist))) }
-                },
-                gestureConfig = settings.gestures, glassIntensity = settings.glassIntensity)
-        }
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp)
-                .glass(RoundedCornerShape(24.dp), settings.glassIntensity).padding(vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-        ) {
-            listOf(Tab.Home to MaterialSymbols.RoundedFilled.Home, Tab.Artists to MaterialSymbols.RoundedFilled.Library_music,
-                Tab.Playlists to MaterialSymbols.RoundedFilled.Playlist_play, Tab.Search to MaterialSymbols.RoundedFilled.Search).forEach { (item, icon) ->
-                Column(Modifier.clickable { selectTab(item) }.padding(horizontal = 10.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(icon, item.name, tint = if (tab == item) accent else muted)
-                    Text(item.name, color = if (tab == item) accent else muted, fontSize = 11.sp)
-                }
-            }
-        }
     }
     }
+    ReferenceChrome(
+        chromeSky, client, nowPlaying, isPlaying, darkMode,
+        selectedTab = when (tab) {
+            Tab.Home -> 0; Tab.Artists -> 1; Tab.Playlists -> 2; Tab.Search -> 3
+        },
+        settings = settings,
+        positionMs = positionMs,
+        durationMs = durationMs,
+        onReadPosition = onReadPosition,
+        onHome = { selectTab(Tab.Home) },
+        onArtists = { selectTab(Tab.Artists) },
+        onPlaylists = { selectTab(Tab.Playlists) },
+        onSearch = { selectTab(Tab.Search) },
+        onExpandPlayer = { playerExpanded = true },
+        onToggle = onTogglePlayback,
+        onNext = onSkipNext,
+        onPrevious = onSkipPrevious,
+        onAddNext = onAddNext,
+        onAddToQueue = onAddToQueue,
+    )
     AnimatedVisibility(
         visible = playerExpanded && nowPlaying != null,
         modifier = Modifier.fillMaxSize().zIndex(1f),
@@ -1040,6 +1018,28 @@ private fun SettingsScreen(
             }
         }
         Spacer(Modifier.height(20.dp))
+        Text("Mini player size", color = ink, fontSize = 16.sp)
+        Text("Choose a compact, balanced, or artwork-led player.", color = muted, fontSize = 13.sp)
+        Spacer(Modifier.height(12.dp))
+        SettingsChoices(MiniPlayerSize.entries.map { it.name }, settings.miniPlayerSize.ordinal) { index ->
+            onChange(settings.copy(miniPlayerSize = MiniPlayerSize.entries[index]))
+        }
+        Spacer(Modifier.height(20.dp))
+        Text("Navigation style", color = ink, fontSize = 16.sp)
+        Text("A flat Spotify-like bar or Glaze’s glass pill.", color = muted, fontSize = 13.sp)
+        Spacer(Modifier.height(12.dp))
+        SettingsChoices(NavigationStyle.entries.map { it.name }, settings.navigationStyle.ordinal) { index ->
+            onChange(settings.copy(navigationStyle = NavigationStyle.entries[index]))
+        }
+        SettingsToggle("Search in navigation", "Turn off for a separate search button",
+            settings.searchInNavigation) {
+            onChange(settings.copy(searchInNavigation = it))
+        }
+        SettingsToggle("Navigation labels", "Show text below the navigation icons",
+            settings.navigationLabels) {
+            onChange(settings.copy(navigationLabels = it))
+        }
+        Spacer(Modifier.height(12.dp))
         Text("Glass intensity", color = ink, fontSize = 16.sp)
         Text("Adjust the translucency of player controls and navigation.", color = muted, fontSize = 13.sp)
         Slider(value = settings.glassIntensity.coerceIn(0f, 1f),
@@ -1074,6 +1074,23 @@ private fun SettingsScreen(
             Text("Disconnect from server", color = ink)
         }
         Spacer(Modifier.height(24.dp))
+    }
+}
+
+@Composable
+private fun SettingsChoices(labels: List<String>, selected: Int, onSelect: (Int) -> Unit) {
+    Row(Modifier.fillMaxWidth().selectableGroup(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        labels.forEachIndexed { index, label ->
+            val active = selected == index
+            Box(Modifier.weight(1f).clip(RoundedCornerShape(14.dp))
+                .background(if (active) ink else ink.copy(alpha = 0.09f))
+                .selectable(selected = active, role = Role.RadioButton, onClick = { onSelect(index) })
+                .padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
+                Text(label, color = if (active) MaterialTheme.colorScheme.background else ink,
+                    fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            }
+        }
     }
 }
 
