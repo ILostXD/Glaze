@@ -321,15 +321,15 @@ internal fun BoxScope.ReferenceChrome(
     val showSearchInNavigation = spotifyNav || settings.searchInNavigation
     val scrimColor = if (darkMode) Color.Black else Color.White
     val miniSurface = if (spotifyNav) {
-        (if (darkMode) Color(0xFF151515) else Color.White).copy(alpha = 0.94f)
+        (if (darkMode) Color(0xFF151515) else Color.White).copy(alpha = if (darkMode) 0.32f else 0.46f)
     } else Color.White.copy(alpha = if (darkMode) 0.06f else 0.14f)
     if (spotifyNav) Box(
-        Modifier.fillMaxWidth().align(Alignment.BottomCenter).height(180.dp)
+        Modifier.fillMaxWidth().align(Alignment.BottomCenter).height(160.dp)
             .background(Brush.verticalGradient(
                 0f to Color.Transparent,
-                0.35f to scrimColor.copy(alpha = 0.24f),
-                0.70f to scrimColor.copy(alpha = 0.61f),
-                1f to scrimColor.copy(alpha = 0.84f),
+                0.35f to scrimColor.copy(alpha = 0.38f),
+                0.70f to scrimColor.copy(alpha = 0.76f),
+                1f to scrimColor.copy(alpha = 0.95f),
             ))
     )
     Column(

@@ -51,6 +51,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -96,10 +97,12 @@ internal fun AlbumCollectionScreen(
     var similarAlbums by remember(album.id) { mutableStateOf(emptyList<Album>()) }
     var similarLoading by remember(album.id) { mutableStateOf(true) }
     var releaseDate by remember(album.id) { mutableStateOf(album.releaseDate) }
+    var canonicalAlbum by remember(album.id) { mutableStateOf<Album?>(null) }
     LaunchedEffect(client, album.id, songs) {
         val details = try { client.albumDetails(album.id) }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { null }
+        canonicalAlbum = details
         releaseDate = details?.releaseDate ?: album.releaseDate
         val artists = (details?.artists.orEmpty().ifEmpty { album.artists }).ifEmpty {
             try { songs.firstOrNull()?.let { client.songArtists(it.id) }.orEmpty()
@@ -140,15 +143,17 @@ internal fun AlbumCollectionScreen(
             }
         similarLoading = false
     }
-    CollectionSurface(album.name, album.coverArt, darkMode, onArtworkColor, onBack,
-        onShare = { onShare("${album.name} — ${album.artist}") }) {
+    val displayAlbum = canonicalAlbum ?: album
+    CollectionSurface(album.name, displayAlbum.coverArt ?: album.coverArt, darkMode, onArtworkColor, onBack,
+        onShare = { onShare("${displayAlbum.name} — ${displayAlbum.artist}") }) {
         item {
             val metadata = listOfNotNull(
                 songs.firstOrNull()?.genre?.takeIf { it.isNotBlank() },
-                album.year?.toString(),
+                displayAlbum.year?.toString(),
                 "Lossless".takeIf { songs.any { song -> song.suffix.equals("flac", true) } },
             ).joinToString(" · ").ifBlank { null }
-            CollectionHeader(album.name, album.artist, metadata, album.coverArt, client)
+            CollectionHeader(displayAlbum.name, displayAlbum.artist, metadata,
+                displayAlbum.coverArt ?: album.coverArt, client)
         }
         item {
             CollectionControls(
@@ -170,7 +175,7 @@ internal fun AlbumCollectionScreen(
         }
         item {
             AlbumFooter(songs.size, songs.sumOf { it.durationSeconds.toLong() },
-                releaseDate ?: album.year?.toString())
+                releaseDate ?: displayAlbum.year?.toString())
         }
         item {
             Column(Modifier.fillMaxWidth()) {
@@ -345,7 +350,8 @@ private fun CollectionHeader(
 ) {
     BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         val coverSize = (maxWidth * 0.68f).coerceAtMost(330.dp)
-        CollectionArtwork(client, artworkId, Modifier.size(coverSize))
+        CollectionArtwork(client, artworkId,
+            Modifier.size(coverSize).shadow(18.dp, RoundedCornerShape(8.dp)))
     }
     Spacer(Modifier.height(22.dp))
     Text(title, color = MaterialTheme.colorScheme.onBackground,
