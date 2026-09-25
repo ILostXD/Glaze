@@ -324,7 +324,7 @@ internal fun BoxScope.ReferenceChrome(
         (if (darkMode) Color(0xFF151515) else Color.White).copy(alpha = 0.94f)
     } else Color.White.copy(alpha = if (darkMode) 0.06f else 0.14f)
     if (spotifyNav) Box(
-        Modifier.fillMaxWidth().align(Alignment.BottomCenter).height(310.dp)
+        Modifier.fillMaxWidth().align(Alignment.BottomCenter).height(210.dp)
             .background(Brush.verticalGradient(
                 0f to Color.Transparent,
                 0.35f to scrimColor.copy(alpha = 0.54f),
