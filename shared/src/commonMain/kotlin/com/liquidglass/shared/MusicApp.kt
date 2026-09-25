@@ -109,6 +109,7 @@ import com.liquidglass.shared.resources.be_vietnam_pro_semibold
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -497,10 +498,10 @@ private fun LibraryScreen(
     }
 
     val chromeSky = rememberSky()
-    val chromeSpace = if (nowPlaying == null) 98.dp else when (settings.miniPlayerSize) {
-        MiniPlayerSize.Small -> 158.dp
-        MiniPlayerSize.Medium -> 172.dp
-        MiniPlayerSize.Large -> 190.dp
+    val chromeSpace = if (nowPlaying == null) 120.dp else when (settings.miniPlayerSize) {
+        MiniPlayerSize.Small -> 180.dp
+        MiniPlayerSize.Medium -> 194.dp
+        MiniPlayerSize.Large -> 210.dp
     }
     Box(Modifier.fillMaxSize()) {
     if (isHome || detail is Detail.ArtistPage || detail is Detail.AlbumPage) {
@@ -540,8 +541,7 @@ private fun LibraryScreen(
         }
     } else {
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
-        .sky(chromeSky).statusBarsPadding().navigationBarsPadding()
-        .padding(top = 20.dp, bottom = chromeSpace)) {
+        .sky(chromeSky).statusBarsPadding().padding(top = 20.dp)) {
         AppToolbar(
             title = when (val page = detail) {
                 is Detail.ArtistPage -> page.artist.name
@@ -564,22 +564,23 @@ private fun LibraryScreen(
             if (loading) CircularProgressIndicator(Modifier.align(Alignment.Center), color = accent)
             else when (val page = detail) {
                 is Detail.AlbumPage -> SongList(songs, client, onPlay, onAddNext, onAddToQueue,
-                    onShuffleSongs)
+                    onShuffleSongs, chromeSpace)
                 is Detail.PlaylistPage -> SongList(songs, client, onPlay, onAddNext, onAddToQueue,
-                    onShuffleSongs)
-                is Detail.ArtistPage -> AlbumList(artistAlbums, client) {
+                    onShuffleSongs, chromeSpace)
+                is Detail.ArtistPage -> AlbumList(artistAlbums, client, chromeSpace) {
                     openDetail(Detail.AlbumPage(it))
                 }
                 Detail.QueuePage -> QueueScreen(queue, currentIndex, client,
-                    onPlayQueueIndex, onRemoveFromQueue, onMoveInQueue, onAddNext, onAddToQueue)
-                Detail.SettingsPage -> SettingsScreen(settings, onSettingsChange, onDisconnect)
+                    onPlayQueueIndex, onRemoveFromQueue, onMoveInQueue, onAddNext, onAddToQueue,
+                    chromeSpace)
+                Detail.SettingsPage -> SettingsScreen(settings, onSettingsChange, onDisconnect, chromeSpace)
                 null -> when (tab) {
                     Tab.Home -> Unit
-                    Tab.Artists -> ArtistList(artists, client) { openDetail(Detail.ArtistPage(it)) }
-                    Tab.Playlists -> PlaylistList(playlists, client) { openDetail(Detail.PlaylistPage(it)) }
+                    Tab.Artists -> ArtistList(artists, client, chromeSpace) { openDetail(Detail.ArtistPage(it)) }
+                    Tab.Playlists -> PlaylistList(playlists, client, chromeSpace) { openDetail(Detail.PlaylistPage(it)) }
                     Tab.Search -> SearchContent(query, { query = it }, results, client,
                         { openDetail(Detail.ArtistPage(it)) }, { openDetail(Detail.AlbumPage(it)) },
-                        { onPlay(it, listOf(it)) }, onAddNext, onAddToQueue)
+                        { onPlay(it, listOf(it)) }, onAddNext, onAddToQueue, chromeSpace)
                 }
             }
         }
@@ -591,9 +592,6 @@ private fun LibraryScreen(
             Tab.Home -> 0; Tab.Artists -> 1; Tab.Playlists -> 2; Tab.Search -> 3
         },
         settings = settings,
-        positionMs = positionMs,
-        durationMs = durationMs,
-        onReadPosition = onReadPosition,
         onHome = { selectTab(Tab.Home) },
         onArtists = { selectTab(Tab.Artists) },
         onPlaylists = { selectTab(Tab.Playlists) },
@@ -848,8 +846,11 @@ private fun HomeAlbumCard(album: Album, client: SubsonicClient, onAlbum: (Album)
 }
 
 @Composable
-private fun AlbumList(albums: List<Album>, client: SubsonicClient, onAlbum: (Album) -> Unit) =
-    LazyColumn { items(albums, key = { it.id }) { AlbumRow(it, client) { onAlbum(it) } } }
+private fun AlbumList(albums: List<Album>, client: SubsonicClient, bottomPadding: Dp,
+                      onAlbum: (Album) -> Unit) =
+    LazyColumn(contentPadding = PaddingValues(bottom = bottomPadding)) {
+        items(albums, key = { it.id }) { AlbumRow(it, client) { onAlbum(it) } }
+    }
 
 @Composable
 private fun AlbumRow(album: Album, client: SubsonicClient, onClick: () -> Unit) {
@@ -868,8 +869,10 @@ private fun AlbumRow(album: Album, client: SubsonicClient, onClick: () -> Unit) 
 }
 
 @Composable
-private fun ArtistList(artists: List<Artist>, client: SubsonicClient, onArtist: (Artist) -> Unit) =
-    LazyColumn { items(artists, key = { it.id }) { artist ->
+private fun ArtistList(artists: List<Artist>, client: SubsonicClient, bottomPadding: Dp,
+                       onArtist: (Artist) -> Unit) =
+    LazyColumn(contentPadding = PaddingValues(bottom = bottomPadding)) {
+        items(artists, key = { it.id }) { artist ->
         Row(Modifier.fillMaxWidth().clickable { onArtist(artist) }.padding(horizontal = 22.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically) {
             Artwork(client, artist.coverArt, Modifier.size(56.dp))
@@ -881,8 +884,10 @@ private fun ArtistList(artists: List<Artist>, client: SubsonicClient, onArtist: 
     } }
 
 @Composable
-private fun PlaylistList(playlists: List<Playlist>, client: SubsonicClient, onPlaylist: (Playlist) -> Unit) =
-    LazyColumn { items(playlists, key = { it.id }) { playlist ->
+private fun PlaylistList(playlists: List<Playlist>, client: SubsonicClient, bottomPadding: Dp,
+                         onPlaylist: (Playlist) -> Unit) =
+    LazyColumn(contentPadding = PaddingValues(bottom = bottomPadding)) {
+        items(playlists, key = { it.id }) { playlist ->
         Row(Modifier.fillMaxWidth().clickable { onPlaylist(playlist) }.padding(horizontal = 22.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically) {
             Artwork(client, playlist.coverArt, Modifier.size(60.dp))
@@ -900,8 +905,8 @@ private fun PlaylistList(playlists: List<Playlist>, client: SubsonicClient, onPl
 private fun SongList(songs: List<Song>, client: SubsonicClient,
                      onPlay: (Song, List<Song>) -> Unit,
                      onAddNext: (Song) -> Unit, onAddToQueue: (Song) -> Unit,
-                     onShuffle: (List<Song>) -> Unit) =
-    LazyColumn {
+                     onShuffle: (List<Song>) -> Unit, bottomPadding: Dp) =
+    LazyColumn(contentPadding = PaddingValues(bottom = bottomPadding)) {
         if (songs.isNotEmpty()) item {
             TextButton(onClick = { onShuffle(songs) }, modifier = Modifier.padding(horizontal = 16.dp)) {
                 Text("Shuffle", color = accent)
@@ -963,12 +968,13 @@ private fun SearchContent(
     onSong: (Song) -> Unit,
     onAddNext: (Song) -> Unit,
     onAddToQueue: (Song) -> Unit,
+    bottomPadding: Dp,
 ) {
     Column {
         OutlinedTextField(query, onQuery, label = { Text("Search your library") },
             leadingIcon = { Icon(MaterialSymbols.RoundedFilled.Search, null) }, singleLine = true,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 8.dp))
-        LazyColumn {
+        LazyColumn(contentPadding = PaddingValues(bottom = bottomPadding)) {
             if (results.artists.isNotEmpty()) item { SectionTitle("Artists") }
             items(results.artists, key = { "artist:${it.id}" }) { artist ->
                 Row(Modifier.fillMaxWidth().clickable { onArtist(artist) }.padding(22.dp)) {
@@ -995,6 +1001,7 @@ private fun SettingsScreen(
     settings: AppSettings,
     onChange: (AppSettings) -> Unit,
     onDisconnect: () -> Unit,
+    bottomPadding: Dp,
 ) {
     val gestures = settings.gestures
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 22.dp)) {
@@ -1019,7 +1026,7 @@ private fun SettingsScreen(
         }
         Spacer(Modifier.height(20.dp))
         Text("Mini player size", color = ink, fontSize = 16.sp)
-        Text("Choose a compact, balanced, or artwork-led player.", color = muted, fontSize = 13.sp)
+        Text("Choose a compact, balanced, or larger player.", color = muted, fontSize = 13.sp)
         Spacer(Modifier.height(12.dp))
         SettingsChoices(MiniPlayerSize.entries.map { it.name }, settings.miniPlayerSize.ordinal) { index ->
             onChange(settings.copy(miniPlayerSize = MiniPlayerSize.entries[index]))
@@ -1031,9 +1038,11 @@ private fun SettingsScreen(
         SettingsChoices(NavigationStyle.entries.map { it.name }, settings.navigationStyle.ordinal) { index ->
             onChange(settings.copy(navigationStyle = NavigationStyle.entries[index]))
         }
-        SettingsToggle("Search in navigation", "Turn off for a separate search button",
-            settings.searchInNavigation) {
-            onChange(settings.copy(searchInNavigation = it))
+        if (settings.navigationStyle == NavigationStyle.Glaze) {
+            SettingsToggle("Search in navigation", "Turn off for a separate search button",
+                settings.searchInNavigation) {
+                onChange(settings.copy(searchInNavigation = it))
+            }
         }
         SettingsToggle("Navigation labels", "Show text below the navigation icons",
             settings.navigationLabels) {
@@ -1073,7 +1082,7 @@ private fun SettingsScreen(
         TextButton(onClick = onDisconnect) {
             Text("Disconnect from server", color = ink)
         }
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(bottomPadding))
     }
 }
 
@@ -1281,6 +1290,7 @@ private fun QueueScreen(
     onMove: (Int, Int) -> Unit,
     onAddNext: (Song) -> Unit,
     onAddToQueue: (Song) -> Unit,
+    bottomPadding: Dp,
 ) {
     if (queue.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -1296,7 +1306,7 @@ private fun QueueScreen(
             removalLocked = false
         }
     }
-    LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
+    LazyColumn(contentPadding = PaddingValues(bottom = bottomPadding)) {
         items(queue.size, key = { "${queue[it].id}:$it" }) { index ->
             val song = queue[index]
             if (index == currentIndex) SectionTitle("Playing now")

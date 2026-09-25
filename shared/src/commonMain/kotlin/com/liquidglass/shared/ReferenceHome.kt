@@ -12,7 +12,6 @@ import com.composables.icons.materialsymbols.roundedfilled.Search
 import com.composables.icons.materialsymbols.roundedfilled.Skip_next
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.background
@@ -48,10 +47,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -62,8 +59,6 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
@@ -77,7 +72,6 @@ import com.liquidglass.shared.resources.glaze_wordmark
 import com.skydoves.cloudy.Sky
 import com.skydoves.cloudy.cloudy
 import org.jetbrains.compose.resources.painterResource
-import kotlinx.coroutines.delay
 
 @Composable
 internal fun ReferenceHomeScreen(
@@ -288,9 +282,6 @@ internal fun BoxScope.ReferenceChrome(
     darkMode: Boolean,
     selectedTab: Int,
     settings: AppSettings,
-    positionMs: Long,
-    durationMs: Long,
-    onReadPosition: () -> Pair<Long, Long>,
     onHome: () -> Unit,
     onArtists: () -> Unit,
     onPlaylists: () -> Unit,
@@ -323,21 +314,24 @@ internal fun BoxScope.ReferenceChrome(
     val coverSize = when (settings.miniPlayerSize) {
         MiniPlayerSize.Small -> 38.dp
         MiniPlayerSize.Medium -> 47.dp
-        MiniPlayerSize.Large -> 68.dp
+        MiniPlayerSize.Large -> 60.dp
     }
-    var livePosition by remember(song?.id) { mutableLongStateOf(positionMs) }
-    LaunchedEffect(positionMs) { livePosition = positionMs }
-    LaunchedEffect(song?.id, isPlaying, settings.miniPlayerSize) {
-        if (song != null && settings.miniPlayerSize == MiniPlayerSize.Large) {
-            do {
-                livePosition = onReadPosition().first
-                delay(400)
-            } while (isPlaying)
-        }
-    }
-    val totalDuration = durationMs.takeIf { it > 0 } ?: ((song?.durationSeconds ?: 0) * 1000L)
-    val progress = if (totalDuration > 0) (livePosition.toFloat() / totalDuration).coerceIn(0f, 1f) else 0f
     val navHeight = if (settings.navigationLabels) 67.dp else 57.dp
+    val spotifyNav = settings.navigationStyle == NavigationStyle.Spotify
+    val showSearchInNavigation = spotifyNav || settings.searchInNavigation
+    val scrimColor = if (darkMode) Color.Black else Color.White
+    val miniSurface = if (spotifyNav) {
+        (if (darkMode) Color(0xFF151515) else Color.White).copy(alpha = 0.94f)
+    } else Color.White.copy(alpha = if (darkMode) 0.06f else 0.14f)
+    if (spotifyNav) Box(
+        Modifier.fillMaxWidth().align(Alignment.BottomCenter).height(310.dp)
+            .background(Brush.verticalGradient(
+                0f to Color.Transparent,
+                0.35f to scrimColor.copy(alpha = 0.54f),
+                0.70f to scrimColor.copy(alpha = 0.92f),
+                1f to scrimColor,
+            ))
+    )
     Column(
         Modifier.fillMaxWidth().align(Alignment.BottomCenter)
             .navigationBarsPadding().padding(horizontal = 17.dp, vertical = 10.dp),
@@ -348,8 +342,7 @@ internal fun BoxScope.ReferenceChrome(
                 Modifier.fillMaxWidth().height(miniHeight)
                     .shadow(18.dp, pill).clip(pill)
                     .cloudy(sky = sky, radius = 44, tint = tint, shape = pill)
-                    .background(if (darkMode) Color.White.copy(alpha = 0.06f)
-                        else Color.White.copy(alpha = 0.14f))
+                    .background(miniSurface)
                     .border(1.dp, sheen, pill)
                     .then(if (settings.gestures.miniPlayerSwipe) Modifier.pointerInput(song.id, swipeThreshold) {
                         detectHorizontalDragGestures(
@@ -365,13 +358,13 @@ internal fun BoxScope.ReferenceChrome(
                     .combinedClickable(onClick = onExpandPlayer,
                         onLongClick = if (settings.gestures.miniPlayerLongPress)
                             ({ menuOpen = true }) else null)
-                    .padding(horizontal = 7.dp),
+                    .padding(horizontal = if (settings.miniPlayerSize == MiniPlayerSize.Large) 9.dp else 7.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 AlbumImage(client, song.coverArt,
-                    Modifier.size(coverSize).clip(if (settings.miniPlayerSize == MiniPlayerSize.Large)
-                        CircleShape else RoundedCornerShape(12.dp)))
-                Spacer(Modifier.width(10.dp))
+                    Modifier.size(coverSize).clip(RoundedCornerShape(
+                        if (settings.miniPlayerSize == MiniPlayerSize.Large) 15.dp else 12.dp)))
+                Spacer(Modifier.width(if (settings.miniPlayerSize == MiniPlayerSize.Large) 12.dp else 10.dp))
                 Column(Modifier.weight(1f)) {
                     Text(song.title, color = ink,
                         fontSize = if (settings.miniPlayerSize == MiniPlayerSize.Large) 16.sp else 13.sp,
@@ -383,35 +376,20 @@ internal fun BoxScope.ReferenceChrome(
                             ExplicitBadge(color = muted)
                             Spacer(Modifier.width(5.dp))
                         }
-                        Text(song.artist, color = muted, fontSize = 11.sp,
+                        Text(song.artist, color = muted,
+                            fontSize = if (settings.miniPlayerSize == MiniPlayerSize.Large) 14.sp else 11.sp,
                             maxLines = 1, softWrap = false, overflow = TextOverflow.Clip,
                             modifier = Modifier.weight(1f).basicMarquee(iterations = Int.MAX_VALUE))
                     }
                 }
-                if (settings.miniPlayerSize == MiniPlayerSize.Large) {
-                    Box(Modifier.size(50.dp), contentAlignment = Alignment.Center) {
-                        Canvas(Modifier.size(47.dp)) {
-                            val stroke = 2.5.dp.toPx()
-                            drawCircle(ink.copy(alpha = 0.26f), style = Stroke(stroke))
-                            drawArc(ink, startAngle = -90f, sweepAngle = 360f * progress,
-                                useCenter = false, style = Stroke(stroke, cap = StrokeCap.Round))
-                        }
-                        IconButton(onClick = onToggle) {
-                            Icon(if (isPlaying) MaterialSymbols.RoundedFilled.Pause else MaterialSymbols.RoundedFilled.Play_arrow,
-                                if (isPlaying) "Pause" else "Play", tint = ink,
-                                modifier = Modifier.size(27.dp))
-                        }
-                    }
-                } else {
-                    IconButton(onClick = onToggle) {
-                        Icon(if (isPlaying) MaterialSymbols.RoundedFilled.Pause else MaterialSymbols.RoundedFilled.Play_arrow,
-                            if (isPlaying) "Pause" else "Play", tint = ink,
-                            modifier = Modifier.size(27.dp))
-                    }
-                    if (settings.miniPlayerSize == MiniPlayerSize.Medium) IconButton(onClick = onNext) {
-                        Icon(MaterialSymbols.RoundedFilled.Skip_next, "Next", tint = ink,
-                            modifier = Modifier.size(27.dp))
-                    }
+                IconButton(onClick = onToggle) {
+                    Icon(if (isPlaying) MaterialSymbols.RoundedFilled.Pause else MaterialSymbols.RoundedFilled.Play_arrow,
+                        if (isPlaying) "Pause" else "Play", tint = ink,
+                        modifier = Modifier.size(if (settings.miniPlayerSize == MiniPlayerSize.Large) 31.dp else 27.dp))
+                }
+                if (settings.miniPlayerSize != MiniPlayerSize.Small) IconButton(onClick = onNext) {
+                    Icon(MaterialSymbols.RoundedFilled.Skip_next, "Next", tint = ink,
+                        modifier = Modifier.size(if (settings.miniPlayerSize == MiniPlayerSize.Large) 31.dp else 27.dp))
                 }
             }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
@@ -431,10 +409,7 @@ internal fun BoxScope.ReferenceChrome(
                             .cloudy(sky = sky, radius = 48, tint = tint, shape = pill)
                             .background(Color.White.copy(alpha = if (darkMode) 0.04f else 0.11f))
                             .border(1.dp, sheen, pill).padding(5.dp)
-                    else Modifier.background(Brush.verticalGradient(listOf(
-                        Color.Transparent,
-                        MaterialTheme.colorScheme.background.copy(alpha = 0.90f),
-                    )))),
+                    else Modifier),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 val tabs = listOf(
@@ -445,7 +420,7 @@ internal fun BoxScope.ReferenceChrome(
                 )
                 val order = if (settings.navigationStyle == NavigationStyle.Spotify)
                     listOf(0, 3, 1, 2) else listOf(0, 1, 2, 3)
-                order.filter { settings.searchInNavigation || it != 3 }.forEach { index ->
+                order.filter { showSearchInNavigation || it != 3 }.forEach { index ->
                     val tab = tabs[index]
                     Column(
                         Modifier.weight(1f).fillMaxSize().clip(pill)
@@ -466,7 +441,7 @@ internal fun BoxScope.ReferenceChrome(
                     }
                 }
             }
-            if (!settings.searchInNavigation) Box(
+            if (!showSearchInNavigation) Box(
                 Modifier.size(navHeight).shadow(18.dp, CircleShape).clip(CircleShape)
                     .cloudy(sky = sky, radius = 48, tint = tint, shape = CircleShape)
                     .background(Color.White.copy(alpha = if (darkMode) 0.04f else 0.11f))
