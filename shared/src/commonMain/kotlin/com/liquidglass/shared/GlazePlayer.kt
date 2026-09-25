@@ -11,6 +11,7 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.fadeIn
@@ -1220,6 +1221,12 @@ private fun SongOptionsSheet(
     var playlists by remember(song.id) { mutableStateOf<List<Playlist>>(emptyList()) }
     var loading by remember(song.id) { mutableStateOf(false) }
     var message by remember(song.id) { mutableStateOf<String?>(null) }
+    var pullDown by remember { mutableFloatStateOf(0f) }
+    var draggingHandle by remember { mutableStateOf(false) }
+    val sheetPull by animateFloatAsState(pullDown,
+        animationSpec = if (draggingHandle) snap() else spring(stiffness = Spring.StiffnessMedium),
+        label = "More sheet pull")
+    val dismissThreshold = with(LocalDensity.current) { 48.dp.toPx() }
     val scope = rememberCoroutineScope()
     LaunchedEffect(client, view) {
         if (view == SongOptionsView.Playlists) {
@@ -1231,9 +1238,23 @@ private fun SongOptionsSheet(
             finally { loading = false }
         }
     }
-    PlayerSheetSurface(artUrl, Modifier.fillMaxWidth()) {
+    PlayerSheetSurface(artUrl, Modifier.fillMaxWidth()
+        .offset { IntOffset(0, sheetPull.roundToInt()) }) {
     Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 24.dp)) {
-        SheetHandle(onDismiss = onClose)
+        Box(Modifier.pointerInput(Unit) {
+            detectVerticalDragGestures(
+                onDragStart = { draggingHandle = true },
+                onVerticalDrag = { change, amount ->
+                    pullDown = (pullDown + amount).coerceAtLeast(0f)
+                    if (pullDown > 0f) change.consume()
+                },
+                onDragEnd = {
+                    draggingHandle = false
+                    if (pullDown >= dismissThreshold) onClose() else pullDown = 0f
+                },
+                onDragCancel = { draggingHandle = false; pullDown = 0f },
+            )
+        }) { SheetHandle() }
         Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 20.dp),
             verticalAlignment = Alignment.CenterVertically) {
             CoverArt(client, song, Modifier.size(62.dp).clip(RoundedCornerShape(12.dp)))
@@ -1387,26 +1408,10 @@ private fun SongOptionRow(icon: ImageVector, label: String, onClick: () -> Unit)
 }
 
 @Composable
-private fun SheetHandle(onDismiss: (() -> Unit)? = null) {
-    var pullDown by remember { mutableFloatStateOf(0f) }
-    val threshold = with(LocalDensity.current) { 48.dp.toPx() }
-    Box(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 6.dp)
-        .then(if (onDismiss != null) Modifier.height(28.dp).pointerInput(Unit) {
-            detectVerticalDragGestures(
-                onVerticalDrag = { change, amount ->
-                    pullDown = (pullDown + amount).coerceAtLeast(0f)
-                    if (pullDown > 0f) change.consume()
-                },
-                onDragEnd = {
-                    if (pullDown >= threshold) onDismiss()
-                    pullDown = 0f
-                },
-                onDragCancel = { pullDown = 0f },
-            )
-        } else Modifier),
+private fun SheetHandle() {
+    Box(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 6.dp),
         contentAlignment = Alignment.Center) {
-        Box(Modifier.offset { IntOffset(0, pullDown.coerceAtMost(threshold / 2f).roundToInt()) }
-            .size(width = 38.dp, height = 4.dp).clip(CircleShape)
+        Box(Modifier.size(width = 38.dp, height = 4.dp).clip(CircleShape)
             .background(playerSecondary))
     }
 }

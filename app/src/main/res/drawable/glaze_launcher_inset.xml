@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <inset xmlns:android="http://schemas.android.com/apk/res/android"
     android:drawable="@drawable/glaze_launcher_foreground"
-    android:insetLeft="33dp"
-    android:insetTop="33dp"
-    android:insetRight="33dp"
-    android:insetBottom="33dp" />
+    android:insetLeft="21dp"
+    android:insetTop="21dp"
+    android:insetRight="21dp"
+    android:insetBottom="21dp" />
