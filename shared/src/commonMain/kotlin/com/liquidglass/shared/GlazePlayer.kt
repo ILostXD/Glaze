@@ -44,7 +44,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -89,12 +88,8 @@ import androidx.compose.ui.draw.dropShadow
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ColorFilter
-import androidx.compose.ui.graphics.ColorMatrix
-import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
@@ -429,6 +424,7 @@ private fun FluidArtworkBackground(
     var seconds by remember(artUrl) { mutableFloatStateOf(0f) }
     LaunchedEffect(artUrl, isPlaying) {
         if (artUrl != null && isPlaying) {
+            // Restart the frame baseline on resume, retaining the accumulated phase.
             var previousFrame = withFrameNanos { it }
             while (true) {
                 withFrameNanos { frame ->
@@ -440,58 +436,20 @@ private fun FluidArtworkBackground(
             }
         }
     }
-    BoxWithConstraints(Modifier.fillMaxSize().clipToBounds().background(Color.Black)) {
+    Box(Modifier.fillMaxSize().clipToBounds().background(backdropColor)) {
         if (artUrl != null) {
-            val viewWidth = maxWidth
-            val overscan = viewWidth * 0.30f
-            val sceneSize = viewWidth + overscan * 2f
-            // The reference animates square, width-relative artwork copies before twisting
-            // and blurring the whole scene. Stretch only that finished scene for portrait.
-            Box(Modifier.requiredSize(sceneSize).align(Alignment.Center)
-                .graphicsLayer { scaleY = (maxHeight + overscan * 2f).toPx() / sceneSize.toPx() }
-                .saturateArtwork().blur(viewWidth * 0.085f).artworkTwist()) {
-                Box(Modifier.matchParentSize().background(backdropColor))
-                AsyncImage(
-                    model = artUrl, contentDescription = null, contentScale = ContentScale.Crop,
-                    onSuccess = { sky.invalidate() },
-                    modifier = Modifier.matchParentSize(),
-                )
-                repeat(2) { index ->
-                    val fraction = if (index == 0) 1.60f else 1.32f
-                    AsyncImage(
-                        model = artUrl, contentDescription = null, contentScale = ContentScale.Crop,
-                        onSuccess = { sky.invalidate() },
-                        modifier = Modifier.size(viewWidth * fraction).align(Alignment.Center)
-                            .graphicsLayer {
-                                val width = viewWidth.toPx()
-                                val inset = overscan.toPx()
-                                val radians = seconds * 1.7f * if (index == 0) 0.09f else -0.24f
-                                rotationZ = radians * (180f / PI.toFloat())
-                                val centerX = inset + width * if (index == 0) 0.5f else 0.38f
-                                val centerY = inset + width * if (index == 0) 0.5f else 0.45f
-                                translationX = centerX - sceneSize.toPx() / 2f
-                                translationY = centerY - sceneSize.toPx() / 2f
-                            },
-                    )
-                }
-            }
+            FluidArtworkSurface(
+                artUrl = artUrl,
+                seconds = { seconds },
+                onArtworkReady = { sky.invalidate() },
+                modifier = Modifier.fillMaxSize(),
+            )
             Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(
-                Color.Black.copy(alpha = 0.16f),
-                Color.Black.copy(alpha = 0.25f),
-                Color.Black.copy(alpha = 0.34f),
+                Color.Black.copy(alpha = 0.06f),
+                Color.Black.copy(alpha = 0.12f),
+                Color.Black.copy(alpha = 0.22f),
             ))))
         }
-    }
-}
-
-private fun Modifier.saturateArtwork(): Modifier = drawWithCache {
-    val paint = Paint().apply {
-        colorFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(1.55f) })
-    }
-    onDrawWithContent {
-        drawContext.canvas.saveLayer(Rect(Offset.Zero, size), paint)
-        drawContent()
-        drawContext.canvas.restore()
     }
 }
 
