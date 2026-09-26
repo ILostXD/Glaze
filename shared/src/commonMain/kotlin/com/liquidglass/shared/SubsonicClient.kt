@@ -3,6 +3,8 @@ package com.liquidglass.shared
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.get
+import io.ktor.client.request.forms.submitForm
+import io.ktor.http.parameters
 import io.ktor.http.URLBuilder
 import io.ktor.http.Url
 import kotlinx.serialization.json.Json
@@ -163,6 +165,24 @@ class SubsonicClient(
         request("updatePlaylist", "playlistId" to playlistId, "songIdToAdd" to songId)
     }
 
+    suspend fun removeSongFromPlaylist(playlistId: String, index: Int) {
+        request("updatePlaylist", "playlistId" to playlistId,
+            "songIndexToRemove" to index.toString())
+    }
+
+    suspend fun replacePlaylistSongs(playlistId: String, songs: List<Song>) {
+        if (songs.size <= 80) {
+            request("createPlaylist", *(listOf("playlistId" to playlistId) +
+                songs.map { "songId" to it.id }).toTypedArray())
+        } else {
+            val body = http.submitForm(url("createPlaylist"), formParameters = parameters {
+                append("playlistId", playlistId)
+                songs.forEach { append("songId", it.id) }
+            }).body<String>()
+            parseResponse(body)
+        }
+    }
+
     suspend fun lyricsBySongId(id: String): SongLyrics? {
         val candidates = request("getLyricsBySongId", "id" to id).obj("lyricsList")
             .items("structuredLyrics")
@@ -192,6 +212,10 @@ class SubsonicClient(
 
     private suspend fun request(endpoint: String, vararg parameters: Pair<String, String>): JsonObject {
         val body = http.get(url(endpoint, *parameters)).body<String>()
+        return parseResponse(body)
+    }
+
+    private fun parseResponse(body: String): JsonObject {
         val envelope = json.parseToJsonElement(body).asObject().obj("subsonic-response")
         if (envelope.string("status") != "ok") {
             val error = envelope.obj("error")

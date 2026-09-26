@@ -5,6 +5,7 @@ import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpHeaders
 import io.ktor.http.headersOf
+import io.ktor.http.HttpMethod
 import kotlinx.coroutines.runBlocking
 import java.security.MessageDigest
 import java.net.InetSocketAddress
@@ -78,6 +79,44 @@ class SubsonicClientTest {
             val album = requireNotNull(client.albumDetails("b1"))
             assertEquals("September 18, 2026", album.releaseDate)
             assertEquals(listOf("a1", "a2"), album.artists.map { it.id })
+        } finally { client.close() }
+    }
+
+    @Test fun playlistEditsAddressPositionsAndPreserveSongOrder() = runBlocking {
+        val calls = mutableListOf<Pair<String, List<String>>>()
+        val engine = MockEngine { request ->
+            calls += request.url.encodedPath.substringAfterLast('/') to
+                (request.url.parameters.getAll("songId") ?: listOfNotNull(
+                    request.url.parameters["songIndexToRemove"]))
+            assertEquals("playlist-1", request.url.parameters["playlistId"])
+            respond("""{"subsonic-response":{"status":"ok"}}""",
+                headers = headersOf(HttpHeaders.ContentType, "application/json"))
+        }
+        val client = SubsonicClient(credentials, HttpClient(engine))
+        try {
+            client.removeSongFromPlaylist("playlist-1", 2)
+            client.replacePlaylistSongs("playlist-1", listOf(
+                Song("s2", "Two", "Artist", "Album"),
+                Song("s1", "One", "Artist", "Album"),
+                Song("s2", "Two", "Artist", "Album"),
+            ))
+            assertEquals(listOf("updatePlaylist.view" to listOf("2"),
+                "createPlaylist.view" to listOf("s2", "s1", "s2")), calls)
+        } finally { client.close() }
+    }
+
+    @Test fun largePlaylistReorderUsesFormPost() = runBlocking {
+        val engine = MockEngine { request ->
+            assertEquals("createPlaylist.view", request.url.encodedPath.substringAfterLast('/'))
+            assertEquals(HttpMethod.Post, request.method)
+            respond("""{"subsonic-response":{"status":"ok"}}""",
+                headers = headersOf(HttpHeaders.ContentType, "application/json"))
+        }
+        val client = SubsonicClient(credentials, HttpClient(engine))
+        try {
+            client.replacePlaylistSongs("playlist-1", (0..80).map {
+                Song("song-$it", "Song $it", "Artist", "Album")
+            })
         } finally { client.close() }
     }
 
