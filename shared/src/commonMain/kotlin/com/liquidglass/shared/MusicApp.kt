@@ -78,6 +78,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableFloatStateOf
@@ -153,6 +154,7 @@ data class AppSettings(
     val smartShuffle: Boolean = true,
     val themePreference: ThemePreference = ThemePreference.System,
     val miniPlayerSize: MiniPlayerSize = MiniPlayerSize.Medium,
+    val navigationSize: NavigationSize = NavigationSize.Medium,
     val navigationStyle: NavigationStyle = NavigationStyle.Spotify,
     val searchInNavigation: Boolean = true,
     val navigationLabels: Boolean = true,
@@ -160,6 +162,7 @@ data class AppSettings(
 
 enum class ThemePreference { System, Light, Dark }
 enum class MiniPlayerSize { Small, Medium, Large }
+enum class NavigationSize { Small, Medium, Large }
 enum class NavigationStyle { Spotify, Glaze }
 
 private enum class Tab { Home, Artists, Playlists, Search }
@@ -503,7 +506,7 @@ private fun LibraryScreen(
         }
     }
 
-    val chromeSky = rememberSky()
+    val chromeSky = key(tab, detail) { rememberSky() }
     val chromeSpace = if (nowPlaying == null) 120.dp else when (settings.miniPlayerSize) {
         MiniPlayerSize.Small -> 180.dp
         MiniPlayerSize.Medium -> 194.dp
@@ -1059,6 +1062,13 @@ private fun SettingsScreen(
         Spacer(Modifier.height(12.dp))
         SettingsChoices(listOf("Minimal", "Glaze"), settings.navigationStyle.ordinal) { index ->
             onChange(settings.copy(navigationStyle = NavigationStyle.entries[index]))
+        }
+        Spacer(Modifier.height(20.dp))
+        Text("Navigation size", color = ink, fontSize = 16.sp)
+        Text("Adjust the height and icon size of the bottom bar.", color = muted, fontSize = 13.sp)
+        Spacer(Modifier.height(12.dp))
+        SettingsChoices(NavigationSize.entries.map { it.name }, settings.navigationSize.ordinal) { index ->
+            onChange(settings.copy(navigationSize = NavigationSize.entries[index]))
         }
         if (settings.navigationStyle == NavigationStyle.Glaze) {
             SettingsToggle("Search in navigation", "Turn off for a separate search button",

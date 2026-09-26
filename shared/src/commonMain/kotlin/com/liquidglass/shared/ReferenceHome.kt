@@ -296,9 +296,9 @@ internal fun BoxScope.ReferenceChrome(
     val pill = RoundedCornerShape(50)
     val ink = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val tint = if (darkMode)
-        Color.Black.copy(alpha = 0.43f + settings.glassIntensity * 0.22f)
-    else Color.White.copy(alpha = 0.35f + settings.glassIntensity * 0.22f)
+    val intensity = settings.glassIntensity.coerceIn(0f, 1f)
+    val tint = (if (darkMode) Color.Black else Color.White)
+        .copy(alpha = 0.10f + intensity * 0.60f)
     val sheen = Brush.linearGradient(listOf(
         Color.White.copy(alpha = if (darkMode) 0.48f else 0.98f),
         Color.White.copy(alpha = if (darkMode) 0.06f else 0.30f),
@@ -312,17 +312,26 @@ internal fun BoxScope.ReferenceChrome(
         MiniPlayerSize.Large -> 78.dp
     }
     val coverSize = when (settings.miniPlayerSize) {
-        MiniPlayerSize.Small -> 38.dp
-        MiniPlayerSize.Medium -> 47.dp
-        MiniPlayerSize.Large -> 60.dp
+        MiniPlayerSize.Small -> 34.dp
+        MiniPlayerSize.Medium -> 43.dp
+        MiniPlayerSize.Large -> 54.dp
     }
-    val navHeight = if (settings.navigationLabels) 67.dp else 57.dp
+    val navHeight = when (settings.navigationSize) {
+        NavigationSize.Small -> if (settings.navigationLabels) 65.dp else 55.dp
+        NavigationSize.Medium -> if (settings.navigationLabels) 75.dp else 65.dp
+        NavigationSize.Large -> if (settings.navigationLabels) 85.dp else 75.dp
+    }
+    val navIconSize = when (settings.navigationSize) {
+        NavigationSize.Small -> 23.dp
+        NavigationSize.Medium -> 27.dp
+        NavigationSize.Large -> 31.dp
+    }
     val spotifyNav = settings.navigationStyle == NavigationStyle.Spotify
     val showSearchInNavigation = spotifyNav || settings.searchInNavigation
     val scrimColor = if (darkMode) Color.Black else Color.White
     val miniSurface = if (spotifyNav) {
-        (if (darkMode) Color(0xFF151515) else Color.White).copy(alpha = if (darkMode) 0.32f else 0.46f)
-    } else Color.White.copy(alpha = if (darkMode) 0.06f else 0.14f)
+        (if (darkMode) Color(0xFF151515) else Color.White).copy(alpha = 0.04f + intensity * 0.40f)
+    } else Color.White.copy(alpha = 0.02f + intensity * (if (darkMode) 0.18f else 0.24f))
     if (spotifyNav) Box(
         Modifier.fillMaxWidth().align(Alignment.BottomCenter).height(160.dp)
             .background(Brush.verticalGradient(
@@ -334,7 +343,7 @@ internal fun BoxScope.ReferenceChrome(
     )
     Column(
         Modifier.fillMaxWidth().align(Alignment.BottomCenter)
-            .navigationBarsPadding().padding(horizontal = 17.dp, vertical = 10.dp),
+            .navigationBarsPadding().padding(start = 17.dp, end = 17.dp, top = 10.dp, bottom = 2.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         if (song != null) {
@@ -358,12 +367,12 @@ internal fun BoxScope.ReferenceChrome(
                     .combinedClickable(onClick = onExpandPlayer,
                         onLongClick = if (settings.gestures.miniPlayerLongPress)
                             ({ menuOpen = true }) else null)
-                    .padding(horizontal = if (settings.miniPlayerSize == MiniPlayerSize.Large) 9.dp else 7.dp),
+                    .padding(horizontal = if (settings.miniPlayerSize == MiniPlayerSize.Large) 12.dp else 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 AlbumImage(client, song.coverArt,
                     Modifier.size(coverSize).clip(RoundedCornerShape(
-                        if (settings.miniPlayerSize == MiniPlayerSize.Large) 15.dp else 12.dp)))
+                        if (settings.miniPlayerSize == MiniPlayerSize.Large) 11.dp else 9.dp)))
                 Spacer(Modifier.width(if (settings.miniPlayerSize == MiniPlayerSize.Large) 12.dp else 10.dp))
                 Column(Modifier.weight(1f)) {
                     Text(song.title, color = ink,
@@ -387,7 +396,7 @@ internal fun BoxScope.ReferenceChrome(
                         if (isPlaying) "Pause" else "Play", tint = ink,
                         modifier = Modifier.size(if (settings.miniPlayerSize == MiniPlayerSize.Large) 31.dp else 27.dp))
                 }
-                if (settings.miniPlayerSize != MiniPlayerSize.Small) IconButton(onClick = onNext) {
+                IconButton(onClick = onNext) {
                     Icon(MaterialSymbols.RoundedFilled.Skip_next, "Next", tint = ink,
                         modifier = Modifier.size(if (settings.miniPlayerSize == MiniPlayerSize.Large) 31.dp else 27.dp))
                 }
@@ -407,7 +416,7 @@ internal fun BoxScope.ReferenceChrome(
                     .then(if (settings.navigationStyle == NavigationStyle.Glaze)
                         Modifier.shadow(18.dp, pill).clip(pill)
                             .cloudy(sky = sky, radius = 48, tint = tint, shape = pill)
-                            .background(Color.White.copy(alpha = if (darkMode) 0.04f else 0.11f))
+                            .background(Color.White.copy(alpha = 0.02f + intensity * (if (darkMode) 0.12f else 0.20f)))
                             .border(1.dp, sheen, pill).padding(5.dp)
                     else Modifier),
                 verticalAlignment = Alignment.CenterVertically,
@@ -433,22 +442,23 @@ internal fun BoxScope.ReferenceChrome(
                     ) {
                         Icon(tab.first, tab.second,
                             tint = if (selectedTab == index) ink else muted,
-                            modifier = Modifier.size(23.dp))
+                            modifier = Modifier.size(navIconSize))
                         if (settings.navigationLabels) Text(tab.second,
                             color = if (selectedTab == index) ink else muted,
-                            fontSize = 10.sp, fontWeight = FontWeight.W500)
+                            fontSize = (if (settings.navigationSize == NavigationSize.Large) 12 else 11).sp,
+                            fontWeight = FontWeight.W500)
                     }
                 }
             }
             if (!showSearchInNavigation) Box(
                 Modifier.size(navHeight).shadow(18.dp, CircleShape).clip(CircleShape)
                     .cloudy(sky = sky, radius = 48, tint = tint, shape = CircleShape)
-                    .background(Color.White.copy(alpha = if (darkMode) 0.04f else 0.11f))
+                    .background(Color.White.copy(alpha = 0.02f + intensity * (if (darkMode) 0.12f else 0.20f)))
                     .border(1.dp, sheen, CircleShape).clickable(onClick = onSearch),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(MaterialSymbols.RoundedFilled.Search, "Search",
-                    tint = if (selectedTab == 3) ink else muted, modifier = Modifier.size(27.dp))
+                    tint = if (selectedTab == 3) ink else muted, modifier = Modifier.size(navIconSize))
             }
         }
     }
