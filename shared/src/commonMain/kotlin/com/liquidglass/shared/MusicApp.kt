@@ -77,7 +77,6 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
-import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -169,8 +168,10 @@ enum class NavigationSize { Small, Medium, Large }
 enum class NavigationStyle { Spotify, Glaze }
 
 private enum class Tab { Home, Artists, Playlists, Search }
+internal enum class ArtistSection { TopSongs, Albums, Singles }
 private sealed interface Detail {
     data class ArtistPage(val artist: Artist) : Detail
+    data class ArtistSectionPage(val artist: Artist, val section: ArtistSection) : Detail
     data class AlbumPage(val album: Album) : Detail
     data class PlaylistPage(val playlist: Playlist) : Detail
     data object QueuePage : Detail
@@ -184,6 +185,7 @@ fun MusicApp(
     onDisconnect: () -> Unit,
     nowPlaying: Song?,
     isPlaying: Boolean,
+    isBuffering: Boolean,
     playerColor: Color,
     playerBackdropColor: Color,
     queue: List<Song>,
@@ -297,7 +299,7 @@ fun MusicApp(
             } else {
                 val client = remember(credentials) { SubsonicClient(credentials) }
                 DisposableEffect(client) { onDispose { client.close() } }
-                LibraryScreen(client, nowPlaying, isPlaying, playerColor, playerBackdropColor, queue, currentIndex, positionMs,
+                LibraryScreen(client, nowPlaying, isPlaying, isBuffering, playerColor, playerBackdropColor, queue, currentIndex, positionMs,
                     durationMs, onPlay, onTogglePlayback, onSkipNext, onSkipPrevious, onSeek,
                     onAddNext, onAddToQueue, onShareSong, onShareCollection, onArtworkColor,
                     onRemoveFromQueue, onRestoreQueueItem, onMoveInQueue, onPlayQueueIndex,
@@ -373,6 +375,7 @@ private fun LibraryScreen(
     client: SubsonicClient,
     nowPlaying: Song?,
     isPlaying: Boolean,
+    isBuffering: Boolean,
     playerColor: Color,
     playerBackdropColor: Color,
     queue: List<Song>,
@@ -427,6 +430,8 @@ private fun LibraryScreen(
     var albums by remember { mutableStateOf(emptyList<Album>()) }
     var artistAlbums by remember { mutableStateOf(emptyList<Album>()) }
     var artistSongs by remember { mutableStateOf(emptyList<Song>()) }
+    var artistInfo by remember { mutableStateOf(ArtistInfo()) }
+    var artistDetails by remember { mutableStateOf<Artist?>(null) }
     var freshSongs by remember { mutableStateOf(emptyList<Song>()) }
     var artists by remember { mutableStateOf(emptyList<Artist>()) }
     var playlists by remember { mutableStateOf(emptyList<Playlist>()) }
@@ -468,13 +473,31 @@ private fun LibraryScreen(
         songs = emptyList()
         artistAlbums = emptyList()
         artistSongs = emptyList()
+        artistInfo = ArtistInfo()
+        artistDetails = null
         try {
             when (val page = detail) {
                 is Detail.ArtistPage -> {
-                    artistAlbums = client.artistAlbums(page.artist.id)
-                    artistSongs = artistAlbums.take(3).flatMap { album ->
-                        runCatching { client.albumSongs(album.id) }.getOrDefault(emptyList())
-                    }.distinctBy { it.id }.take(10)
+                    artistAlbums = runCatching { client.artistAlbums(page.artist.id) }
+                        .getOrDefault(emptyList()).sortedByDescending { it.releaseOrder }
+                    artistDetails = runCatching { client.artistDetails(page.artist.id) }.getOrNull()
+                    artistInfo = runCatching { client.artistInfo(page.artist.id) }.getOrDefault(ArtistInfo())
+                    artistSongs = runCatching { client.artistTopSongs(page.artist.name) }
+                        .getOrDefault(emptyList()).ifEmpty {
+                            artistAlbums.take(12).flatMap { album ->
+                                runCatching { client.albumSongs(album.id) }.getOrDefault(emptyList())
+                            }.distinctBy { it.id }.sortedByDescending { it.playCount }
+                        }
+                }
+                is Detail.ArtistSectionPage -> {
+                    artistAlbums = runCatching { client.artistAlbums(page.artist.id) }
+                        .getOrDefault(emptyList()).sortedByDescending { it.releaseOrder }
+                    artistSongs = runCatching { client.artistTopSongs(page.artist.name) }
+                        .getOrDefault(emptyList()).ifEmpty {
+                            artistAlbums.take(12).flatMap { album ->
+                                runCatching { client.albumSongs(album.id) }.getOrDefault(emptyList())
+                            }.distinctBy { it.id }.sortedByDescending { it.playCount }
+                        }
                 }
                 is Detail.AlbumPage -> songs = client.albumSongs(page.album.id)
                 is Detail.PlaylistPage -> songs = client.playlistSongs(page.playlist.id)
@@ -521,12 +544,12 @@ private fun LibraryScreen(
         MiniPlayerSize.Large -> 210.dp
     }
     Box(Modifier.fillMaxSize()) {
-    if (isHome || detail is Detail.ArtistPage || detail is Detail.AlbumPage || detail is Detail.PlaylistPage) {
+    if (isHome || detail is Detail.ArtistPage || detail is Detail.ArtistSectionPage || detail is Detail.AlbumPage || detail is Detail.PlaylistPage) {
         Box(Modifier.fillMaxSize()) {
             Box(Modifier.fillMaxSize().sky(chromeSky)) {
                 when (val page = detail) {
                     is Detail.ArtistPage -> ArtistReferenceScreen(
-                        page.artist, artistAlbums, artistSongs, client, darkMode,
+                        artistDetails ?: page.artist, artistAlbums, artistSongs, artistInfo, client, darkMode,
                         onBack = ::goBack,
                         onAlbum = { openDetail(Detail.AlbumPage(it)) },
                         onSong = { onPlay(it, artistSongs) },
@@ -534,6 +557,20 @@ private fun LibraryScreen(
                             onPlay(song, artistSongs)
                         } },
                         onShuffle = { onShuffleSongs(artistSongs) },
+                        onAddNext = onAddNext,
+                        onShareSong = onShareSong,
+                        onShareArtist = onShareCollection,
+                        onArtist = { openDetail(Detail.ArtistPage(it)) },
+                        onSection = { openDetail(Detail.ArtistSectionPage(page.artist, it)) },
+                    )
+                    is Detail.ArtistSectionPage -> ArtistSectionScreen(
+                        page.artist, page.section, artistAlbums, artistSongs, client, darkMode,
+                        onBack = ::goBack,
+                        onAlbum = { openDetail(Detail.AlbumPage(it)) },
+                        onSong = { onPlay(it, artistSongs) },
+                        onAddNext = onAddNext,
+                        onShareSong = onShareSong,
+                        onArtist = { openDetail(Detail.ArtistPage(it)) },
                     )
                     is Detail.AlbumPage -> AlbumReferenceScreen(
                         page.album, songs, client, darkMode,
@@ -579,6 +616,7 @@ private fun LibraryScreen(
         AppToolbar(
             title = when (val page = detail) {
                 is Detail.ArtistPage -> page.artist.name
+                is Detail.ArtistSectionPage -> page.artist.name
                 is Detail.AlbumPage -> page.album.name
                 is Detail.PlaylistPage -> page.playlist.name
                 Detail.QueuePage -> "Queue"
@@ -604,6 +642,7 @@ private fun LibraryScreen(
                 is Detail.ArtistPage -> AlbumList(artistAlbums, client, chromeSpace) {
                     openDetail(Detail.AlbumPage(it))
                 }
+                is Detail.ArtistSectionPage -> Unit
                 Detail.QueuePage -> QueueScreen(queue, currentIndex, client,
                     onPlayQueueIndex, onRemoveFromQueue, onRestoreQueueItem, onMoveInQueue, onAddNext, onAddToQueue,
                     chromeSpace)
@@ -653,7 +692,7 @@ private fun LibraryScreen(
     ) {
         nowPlaying?.let { song ->
             ReferencePlayerScreen(
-                client, song, isPlaying, playerColor, playerBackdropColor, positionMs, durationMs,
+                client, song, isPlaying, isBuffering, playerColor, playerBackdropColor, positionMs, durationMs,
                 queue, currentIndex, settings, onTogglePlayback, onSkipNext, onSkipPrevious,
                 onSeek, { playerExpanded = false }, onPlayQueueIndex, onRemoveFromQueue, onRestoreQueueItem,
                 onMoveInQueue,
@@ -1383,7 +1422,7 @@ private fun QueueScreen(
                         onDragCancel = { dragY = 0f },
                     )
                 } else Modifier
-            val dismissState = rememberSwipeToDismissBoxState(confirmValueChange = { value ->
+            val (dismissState, swipeModifier) = rememberDeliberateDismissState { value ->
                 if (value == SwipeToDismissBoxValue.EndToStart && index != currentIndex && !removalLocked) {
                     removalLocked = true
                     onRemove(index)
@@ -1393,8 +1432,7 @@ private fun QueueScreen(
                             onRestore(song, index)
                     }
                 }
-                false
-            }, positionalThreshold = { it * 0.82f })
+            }
             SwipeToDismissBox(
                 state = dismissState,
                 enableDismissFromStartToEnd = false,
@@ -1408,7 +1446,7 @@ private fun QueueScreen(
                         if (removing) Text("Remove", color = ink)
                     }
                 },
-                modifier = dragModifier,
+                modifier = dragModifier.then(swipeModifier),
             ) {
                 SongRow(song, client, onClick = { onSelect(index) },
                     onAddNext = { onAddNext(song) }, onAddToQueue = { onAddToQueue(song) })

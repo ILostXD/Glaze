@@ -31,6 +31,7 @@ class ServerCredentials(val serverUrl: String, val username: String, val passwor
 data class Artist(
     val id: String, val name: String, val coverArt: String? = null, val albumCount: Int = 0,
     val imageUrl: String? = null,
+    val starred: Boolean = false,
 )
 data class Album(
     val id: String,
@@ -42,6 +43,13 @@ data class Album(
     val starred: Boolean = false,
     val releaseDate: String? = null,
     val artists: List<Artist> = emptyList(),
+    val releaseTypes: List<String> = emptyList(),
+    val releaseOrder: Int = 0,
+)
+data class ArtistInfo(
+    val imageUrl: String? = null,
+    val biography: String? = null,
+    val similarArtists: List<Artist> = emptyList(),
 )
 data class Song(
     val id: String,
@@ -103,11 +111,28 @@ class SubsonicClient(
         request(if (starred) "star" else "unstar", "albumId" to id)
     }
 
+    suspend fun setArtistStarred(id: String, starred: Boolean) {
+        request(if (starred) "star" else "unstar", "artistId" to id)
+    }
+
     suspend fun artists(): List<Artist> = request("getArtists").obj("artists")
         .items("index").flatMap { it.items("artist") }.mapNotNull(::artist)
 
     suspend fun artistAlbums(id: String): List<Album> = request("getArtist", "id" to id)
         .obj("artist").items("album").mapNotNull(::album)
+
+    suspend fun artistDetails(id: String): Artist? = artist(request("getArtist", "id" to id).obj("artist"))
+
+    suspend fun artistTopSongs(name: String, count: Int = 40): List<Song> =
+        request("getTopSongs", "artist" to name, "count" to count.toString())
+            .obj("topSongs").items("song").mapNotNull(::song)
+
+    suspend fun artistInfo(id: String): ArtistInfo {
+        val info = request("getArtistInfo2", "id" to id, "count" to "12").obj("artistInfo2")
+        return ArtistInfo(info.string("largeImageUrl") ?: info.string("mediumImageUrl"),
+            info.string("biography")?.takeIf { it.isNotBlank() },
+            info.items("similarArtist").mapNotNull(::artist))
+    }
 
     suspend fun albumSongs(id: String): List<Song> = request("getAlbum", "id" to id)
         .obj("album").items("song").mapNotNull(::song)
@@ -127,8 +152,7 @@ class SubsonicClient(
             }
     }
 
-    suspend fun artistImageUrl(id: String): String? = request("getArtistInfo2", "id" to id)
-        .obj("artistInfo2").string("mediumImageUrl")
+    suspend fun artistImageUrl(id: String): String? = artistInfo(id).imageUrl
 
     suspend fun newestAlbums(size: Int = 30, offset: Int = 0): List<Album> =
         request("getAlbumList2", "type" to "newest", "size" to size.coerceIn(1, 500).toString(),
@@ -239,16 +263,23 @@ private fun JsonObject.items(key: String): List<JsonObject> = when (val value = 
     is JsonObject -> listOf(value)
     else -> emptyList()
 }
+private fun JsonObject.strings(key: String): List<String> =
+    (this[key] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty()
 private fun artist(value: JsonObject): Artist? = value.string("id")?.let {
     Artist(it, value.string("name") ?: "Unknown artist", value.string("coverArt"),
-        value.int("albumCount") ?: 0, value.string("artistImageUrl"))
+        value.int("albumCount") ?: 0, value.string("artistImageUrl"), value.string("starred") != null)
 }
 private fun album(value: JsonObject): Album? = value.string("id")?.let {
+    val date = value.obj("releaseDate").takeIf { it.int("year") != null }
+        ?: value.obj("originalReleaseDate")
     Album(it, value.string("name") ?: "Unknown album", value.string("artist") ?: "Unknown artist",
         value.string("coverArt"), value.int("songCount") ?: 0, value.int("year"),
         value.string("starred") != null, formatReleaseDate(value.obj("releaseDate"))
             ?: formatReleaseDate(value.obj("originalReleaseDate")),
-        value.items("artists").mapNotNull(::artist))
+        value.items("artists").mapNotNull(::artist),
+        value.strings("releaseTypes"),
+        (date.int("year") ?: value.int("year") ?: 0) * 10000 +
+            (date.int("month") ?: 0) * 100 + (date.int("day") ?: 0))
 }
 
 private fun formatReleaseDate(value: JsonObject): String? {

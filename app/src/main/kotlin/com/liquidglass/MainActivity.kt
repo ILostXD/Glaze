@@ -20,7 +20,9 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.C
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaController
+import androidx.media3.session.MediaConstants
 import androidx.media3.session.SessionToken
 import androidx.palette.graphics.Palette
 import com.google.common.util.concurrent.ListenableFuture
@@ -38,6 +40,9 @@ import androidx.lifecycle.lifecycleScope
 import java.net.URL
 import javax.inject.Inject
 
+internal fun shouldShowBuffering(playWhenReady: Boolean, itemCount: Int, state: Int): Boolean =
+    playWhenReady && itemCount > 0 && (state == Player.STATE_IDLE || state == Player.STATE_BUFFERING)
+
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     @Inject internal lateinit var saved: CredentialStore
@@ -47,6 +52,7 @@ class MainActivity : ComponentActivity() {
     private val appSettings = mutableStateOf(AppSettings())
     private val nowPlaying = mutableStateOf<Song?>(null)
     private val isPlaying = mutableStateOf(false)
+    private val isBuffering = mutableStateOf(false)
     private val queue = mutableStateOf<List<Song>>(emptyList())
     private val currentIndex = mutableIntStateOf(0)
     private val positionMs = mutableLongStateOf(0L)
@@ -69,6 +75,8 @@ class MainActivity : ComponentActivity() {
 
     private fun updatePlayerState(player: Player) {
         isPlaying.value = player.isPlaying
+        isBuffering.value = shouldShowBuffering(player.playWhenReady,
+            player.mediaItemCount, player.playbackState)
         isShuffleEnabled.value = player.shuffleModeEnabled
         repeatMode.intValue = player.repeatMode
         playbackSpeed.floatValue = player.playbackParameters.speed
@@ -129,9 +137,7 @@ class MainActivity : ComponentActivity() {
                     ?: palette.darkVibrantSwatch ?: palette.mutedSwatch
                     ?: palette.lightMutedSwatch ?: palette.dominantSwatch
                 val accent = swatch?.let { Color(it.rgb) } ?: Color.Black
-                val pixels = IntArray(bitmap.width * bitmap.height)
-                bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
-                accent to artworkBackdropColor(pixels,
+                accent to artworkBackdropColor(
                     palette.dominantSwatch?.let { Color(it.rgb) }, accent)
             } finally {
                 bitmap.recycle()
@@ -186,6 +192,7 @@ class MainActivity : ComponentActivity() {
                 },
                 nowPlaying = nowPlaying.value,
                 isPlaying = isPlaying.value,
+                isBuffering = isBuffering.value,
                 playerColor = playerColor.value,
                 playerBackdropColor = playerBackdropColor.value,
                 queue = queue.value,
@@ -247,7 +254,11 @@ class MainActivity : ComponentActivity() {
                     }
                 },
                 onPlay = { song, songs -> play(song, songs) },
-                onTogglePlayback = { controller?.let { if (it.isPlaying) it.pause() else it.play() } },
+                onTogglePlayback = { controller?.let {
+                    if (it.isPlaying || shouldShowBuffering(it.playWhenReady,
+                            it.mediaItemCount, it.playbackState))
+                        it.pause() else it.play()
+                } },
                 onSkipNext = { controller?.seekToNextMediaItem() },
                 onSkipPrevious = { controller?.seekToPreviousMediaItem() },
                 onSeek = { controller?.seekTo(it) },
@@ -271,7 +282,7 @@ class MainActivity : ComponentActivity() {
                 onArtworkColor = { artworkId ->
                     val account = credentials.value
                     if (artworkId == null || account == null) Color.Black
-                    else withContext(Dispatchers.IO) { sampleArtworkColors(account, artworkId).first }
+                    else withContext(Dispatchers.IO) { sampleArtworkColors(account, artworkId).second }
                 },
                 onRemoveFromQueue = { index -> controller?.removeMediaItem(index) },
                 onRestoreQueueItem = { song, index ->
@@ -311,6 +322,7 @@ class MainActivity : ComponentActivity() {
         player.play()
     }
 
+    @OptIn(UnstableApi::class)
     private fun Song.toMediaItem(client: SubsonicClient): MediaItem =
         MediaItem.Builder()
                 .setMediaId(id)
@@ -334,6 +346,8 @@ class MainActivity : ComponentActivity() {
                         samplingRate?.let { putInt("samplingRate", it) }
                         bitRate?.let { putInt("bitRate", it) }
                         putBoolean("isExplicit", isExplicit)
+                        if (isExplicit) putLong(MediaConstants.EXTRAS_KEY_IS_EXPLICIT,
+                            MediaConstants.EXTRAS_VALUE_ATTRIBUTE_PRESENT)
                     })
                     .build())
                 .build()

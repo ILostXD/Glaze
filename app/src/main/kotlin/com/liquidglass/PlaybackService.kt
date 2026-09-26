@@ -8,6 +8,8 @@ import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.session.MediaConstants
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.ShuffleOrder
@@ -154,6 +156,7 @@ class PlaybackService : MediaLibraryService() {
         )
     }
 
+    @OptIn(UnstableApi::class)
     private fun Song.toMediaItem(client: SubsonicClient): MediaItem = MediaItem.Builder()
         .setMediaId(id)
         .setUri(client.streamUrl(id))
@@ -176,6 +179,8 @@ class PlaybackService : MediaLibraryService() {
                 samplingRate?.let { putInt("samplingRate", it) }
                 bitRate?.let { putInt("bitRate", it) }
                 putBoolean("isExplicit", isExplicit)
+                if (isExplicit) putLong(MediaConstants.EXTRAS_KEY_IS_EXPLICIT,
+                    MediaConstants.EXTRAS_VALUE_ATTRIBUTE_PRESENT)
             }).build())
         .build()
 }

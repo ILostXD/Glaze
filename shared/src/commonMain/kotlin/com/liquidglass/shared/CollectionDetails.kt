@@ -6,10 +6,13 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -34,6 +37,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -49,12 +53,14 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxState
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -74,7 +80,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.zIndex
@@ -102,6 +112,9 @@ import com.composables.icons.materialsymbols.roundedfilled.Queue_music
 import com.composables.icons.materialsymbols.roundedfilled.Share
 import com.composables.icons.materialsymbols.roundedfilled.Search
 import com.composables.icons.materialsymbols.roundedfilled.Shuffle
+import com.skydoves.cloudy.cloudy
+import com.skydoves.cloudy.rememberSky
+import com.skydoves.cloudy.sky
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -109,6 +122,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
+import kotlin.math.abs
 
 @Composable
 internal fun AlbumCollectionScreen(
@@ -127,6 +141,7 @@ internal fun AlbumCollectionScreen(
     var similarLoading by remember(album.id) { mutableStateOf(true) }
     var releaseDate by remember(album.id) { mutableStateOf(album.releaseDate) }
     var canonicalAlbum by remember(album.id) { mutableStateOf<Album?>(null) }
+    var showAlbumArtists by remember(album.id) { mutableStateOf(false) }
     LaunchedEffect(client, album.id, songs) {
         val details = try { client.albumDetails(album.id) }
             catch (cancelled: CancellationException) { throw cancelled }
@@ -183,7 +198,10 @@ internal fun AlbumCollectionScreen(
             ).joinToString(" · ").ifBlank { null }
             CollectionHeader(displayAlbum.name, displayAlbum.artist, metadata,
                 displayAlbum.coverArt ?: album.coverArt, client,
-                onSubtitleClick = albumArtists.firstOrNull()?.let { artist -> { onArtist(artist) } })
+                onSubtitleClick = if (albumArtists.isEmpty()) null else {{
+                    if (albumArtists.size == 1) onArtist(albumArtists.first())
+                    else showAlbumArtists = true
+                }})
         }
         item {
             CollectionControls(
@@ -200,9 +218,10 @@ internal fun AlbumCollectionScreen(
             )
         }
         item { CollectionDivider() }
-        items(songs, key = { "track-${it.id}" }) { song ->
+        itemsIndexed(songs, key = { _, song -> "track-${song.id}" }) { rowIndex, song ->
             CollectionSwipeRow(false, onPlayNext = { onAddNext(song) }) {
-                CollectionTrackRow(song, song.track, false, client, onPlaySong) { selectedSong = song }
+                CollectionTrackRow(song, song.track, false, client, onPlaySong,
+                    dividerAbove = rowIndex > 0) { selectedSong = song }
             }
         }
         item {
@@ -228,6 +247,11 @@ internal fun AlbumCollectionScreen(
             onPlayNext = { onAddNext(song) }, onArtist = onArtist,
             albumArtists = albumArtists)
     }
+    if (showAlbumArtists) AlbumArtistSheet(albumArtists, displayAlbum.coverArt ?: album.coverArt,
+        client, onDismiss = { showAlbumArtists = false }, onArtist = {
+            showAlbumArtists = false
+            onArtist(it)
+        })
 }
 
 @Composable
@@ -249,6 +273,7 @@ internal fun PlaylistReferenceScreen(
     var saving by remember(playlist.id) { mutableStateOf(false) }
     var editError by remember(playlist.id) { mutableStateOf<String?>(null) }
     var searchQuery by remember(playlist.id) { mutableStateOf("") }
+    var searchVisible by remember(playlist.id) { mutableStateOf(false) }
     val snackbar = remember(playlist.id) { SnackbarHostState() }
     var previewOrder by remember(playlist.id) { mutableStateOf<List<Int>?>(null) }
     var draggingIndex by remember { mutableStateOf<Int?>(null) }
@@ -346,7 +371,9 @@ internal fun PlaylistReferenceScreen(
     val artworkId = playlist.coverArt ?: orderedSongs.firstOrNull()?.coverArt
     CollectionSurface(playlist.name, artworkId, darkMode, onArtworkColor, onBack,
         onShare = { onShare(playlist.name) }, listState = listState, listModifier = dragModifier,
-        onEdit = { searchQuery = ""; editing = true; editError = null }, editing = editing,
+        onEdit = { searchQuery = ""; searchVisible = false; editing = true; editError = null }, editing = editing,
+        onPullAtTop = { if (!editing) searchVisible = true },
+        onScrollAway = { if (searchVisible) { searchVisible = false; searchQuery = "" } },
         onCancel = {
             if (!saving) {
                 snackbar.currentSnackbarData?.dismiss()
@@ -377,7 +404,7 @@ internal fun PlaylistReferenceScreen(
                 }
             }
         }, snackbar = snackbar, headerItemIndex = 3) {
-        item { if (!editing) {
+        item { if (!editing && searchVisible) {
             BasicTextField(searchQuery, onValueChange = { searchQuery = it },
                 singleLine = true,
                 textStyle = MaterialTheme.typography.bodyMedium.copy(
@@ -414,7 +441,7 @@ internal fun PlaylistReferenceScreen(
                 modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp))
         }
         item { CollectionDivider() }
-        items(visibleRows, key = { "playlist-track:${it.index}" }) { (index, song) ->
+        itemsIndexed(visibleRows, key = { _, row -> "playlist-track:${row.index}" }) { rowIndex, (index, song) ->
             CollectionSwipeRow(editing, enabled = !saving, allowPlayNext = !editing,
                 onPlayNext = { onAddNext(song) }, onRemove = {
                     if (editing && !saving && index in orderedSongs.indices) {
@@ -434,7 +461,8 @@ internal fun PlaylistReferenceScreen(
                 ).zIndex(if (draggingIndex == index) 1f else 0f)
                     .offset { IntOffset(0, if (draggingIndex == index) dragY.roundToInt() else 0) }) {
                 CollectionTrackRow(song, null, true, client, onPlaySong,
-                    editing = editing, onMore = { selectedSong = song })
+                    editing = editing, dividerAbove = rowIndex > 0,
+                    onMore = { selectedSong = song })
             }
         }
         if (searchQuery.isNotBlank() && visibleRows.isEmpty()) item {
@@ -500,9 +528,11 @@ private fun CollectionSurface(
     onEdit: (() -> Unit)? = null, editing: Boolean = false,
     onCancel: (() -> Unit)? = null, onDone: (() -> Unit)? = null,
     snackbar: SnackbarHostState? = null,
+    onPullAtTop: (() -> Unit)? = null, onScrollAway: (() -> Unit)? = null,
     headerItemIndex: Int = 1,
     content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit,
 ) {
+    val scope = rememberCoroutineScope()
     val titleIsPast by remember { derivedStateOf { listState.firstVisibleItemIndex > headerItemIndex } }
     var sampled by remember(artworkId) { mutableStateOf(Color(0xFF626262)) }
     LaunchedEffect(artworkId) {
@@ -510,30 +540,67 @@ private fun CollectionSurface(
         catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { Color(0xFF626262) }
     }
-    val accent = if (sampled == Color.Black) Color(0xFF343A3C) else sampled
-    val base = if (darkMode) lerp(Color(0xFF101416), accent, 0.38f)
-        else lerp(Color(0xFFF9F9F9), accent, 0.18f)
-    val glow = if (darkMode) lerp(base, accent, 0.60f)
-        else lerp(base, accent, 0.32f)
+    val (base, glow) = collectionBackdropColors(sampled, darkMode)
     val barColor by animateColorAsState(
         if (titleIsPast) base else Color.Transparent,
         animationSpec = tween(140), label = "Collection bar color")
+    val sky = rememberSky()
+    val pullAction by rememberUpdatedState(onPullAtTop)
+    val hideAction by rememberUpdatedState(onScrollAway)
+    val pullDistance = with(LocalDensity.current) { 48.dp.toPx() }
+    val hideDistance = with(LocalDensity.current) { 24.dp.toPx() }
+    val scrollConnection = remember(listState, pullDistance, hideDistance) {
+        object : NestedScrollConnection {
+            var pull = 0f
+            var away = 0f
+            override fun onPostScroll(consumed: Offset, available: Offset,
+                source: NestedScrollSource): Offset {
+                if (source == NestedScrollSource.UserInput &&
+                    !listState.canScrollBackward && available.y > 0f) {
+                    pull += available.y
+                    away = 0f
+                    if (pull >= pullDistance) { pullAction?.invoke(); pull = 0f }
+                } else if (source == NestedScrollSource.UserInput && consumed.y < 0f) {
+                    away -= consumed.y
+                    pull = 0f
+                    if (away >= hideDistance) { hideAction?.invoke(); away = 0f }
+                } else if (source == NestedScrollSource.UserInput) {
+                    pull = 0f
+                    away = 0f
+                }
+                return Offset.Zero
+            }
+        }
+    }
     Box(Modifier.fillMaxSize().background(base)) {
-        Box(Modifier.fillMaxSize().drawWithCache {
-            val brush = Brush.radialGradient(
-                0f to glow, 1f to base,
-                center = Offset(size.width * 0.5f, 290.dp.toPx()),
-                radius = size.width * 0.86f,
-            )
-            onDrawBehind { drawRect(brush) }
-        })
-        LazyColumn(modifier = listModifier, state = listState,
-            contentPadding = PaddingValues(bottom = 220.dp)) {
-            item { Spacer(Modifier.height(104.dp)) }
-            content()
+        Box(Modifier.fillMaxSize().sky(sky)) {
+            Box(Modifier.fillMaxSize().drawWithCache {
+                val visibleItems = listState.layoutInfo.visibleItemsInfo
+                val header = visibleItems.firstOrNull { it.index == headerItemIndex }
+                val glowY = when {
+                    header != null -> header.offset +
+                        (size.width * 0.68f).coerceAtMost(330.dp.toPx()) * 0.5f
+                    visibleItems.isEmpty() -> 290.dp.toPx()
+                    else -> -size.width
+                }
+                val brush = Brush.radialGradient(
+                    0f to glow, 1f to base,
+                    center = Offset(size.width * 0.5f, glowY),
+                    radius = size.width * 0.86f,
+                )
+                onDrawBehind { drawRect(brush) }
+            })
+            LazyColumn(modifier = listModifier.nestedScroll(scrollConnection), state = listState,
+                contentPadding = PaddingValues(bottom = 220.dp)) {
+                item { Spacer(Modifier.height(104.dp)) }
+                content()
+            }
         }
         Box(Modifier.fillMaxWidth().background(barColor).statusBarsPadding()
-            .padding(start = 12.dp, end = 12.dp, top = 8.dp)) {
+            .padding(start = 12.dp, end = 12.dp, top = 8.dp)
+            .clickable(enabled = titleIsPast) {
+                scope.launch { listState.animateScrollToItem(0) }
+            }) {
             IconButton(onClick = onBack, modifier = Modifier.align(Alignment.CenterStart)) {
                 Icon(MaterialSymbols.RoundedFilled.Arrow_back, "Back",
                     tint = MaterialTheme.colorScheme.onBackground)
@@ -569,8 +636,42 @@ private fun CollectionSurface(
             }
         }
         if (snackbar != null) SnackbarHost(snackbar,
-            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 190.dp))
+            modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding()
+                .padding(start = 22.dp, end = 22.dp, top = 68.dp)) { data ->
+            val shape = RoundedCornerShape(18.dp)
+            Row(Modifier.fillMaxWidth().shadow(12.dp, shape).clip(shape)
+                .cloudy(sky = sky, radius = 32,
+                    tint = base.copy(alpha = 0.65f), shape = shape)
+                .background(base.copy(alpha = 0.18f))
+                .border(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.24f), shape)
+                .padding(horizontal = 17.dp, vertical = 15.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Text(data.visuals.message, Modifier.weight(1f),
+                    color = MaterialTheme.colorScheme.onBackground,
+                    style = MaterialTheme.typography.bodyMedium)
+                data.visuals.actionLabel?.let { label ->
+                    Spacer(Modifier.width(12.dp))
+                    Text(label, color = MaterialTheme.colorScheme.onBackground,
+                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                        modifier = Modifier.clickable { data.performAction() }
+                            .padding(horizontal = 5.dp, vertical = 7.dp))
+                }
+            }
+        }
     }
+}
+
+internal fun collectionBackdropColors(sampled: Color, darkMode: Boolean): Pair<Color, Color> {
+    val brightest = maxOf(sampled.red, sampled.green, sampled.blue)
+    val darkest = minOf(sampled.red, sampled.green, sampled.blue)
+    val nearBlack = brightest < 0.08f || (brightest < 0.16f && brightest - darkest < 0.035f)
+    val base = if (darkMode && nearBlack) Color(0xFF080808)
+        else if (darkMode) lerp(Color(0xFF101416), sampled, 0.55f)
+        else lerp(Color(0xFFF9F9F9), sampled, 0.18f)
+    val glow = if (darkMode && nearBlack) Color(0xFF292929)
+        else if (darkMode) lerp(base, Color.White, 0.17f)
+        else lerp(base, Color.White, 0.32f)
+    return base to glow
 }
 
 @Composable
@@ -696,6 +797,47 @@ private fun CollectionDivider() {
         .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.13f)))
 }
 
+internal fun isDeliberateSwipe(offset: Float, width: Float): Boolean =
+    width > 0f && abs(offset) >= width * 0.70f
+
+internal class SwipeActionLatch {
+    private var fired = false
+    fun reset() { fired = false }
+    fun take(): Boolean = if (fired) false else { fired = true; true }
+}
+
+@Composable
+internal fun rememberDeliberateDismissState(
+    onDismiss: (SwipeToDismissBoxValue) -> Unit,
+): Pair<SwipeToDismissBoxState, Modifier> {
+    var width by remember { mutableFloatStateOf(0f) }
+    var stateRef by remember { mutableStateOf<SwipeToDismissBoxState?>(null) }
+    val latch = remember { SwipeActionLatch() }
+    val currentAction by rememberUpdatedState(onDismiss)
+    val state = rememberSwipeToDismissBoxState(
+        confirmValueChange = { value ->
+            // Fast flicks can bypass positionalThreshold; require an intentional full-width drag.
+            if (value != SwipeToDismissBoxValue.Settled &&
+                isDeliberateSwipe(stateRef?.requireOffset() ?: 0f, width) && latch.take())
+                currentAction(value)
+            false
+        },
+        positionalThreshold = { it * 0.82f },
+    )
+    SideEffect { stateRef = state }
+    return state to Modifier.onSizeChanged { width = it.width.toFloat() }
+        .pointerInput(state) {
+            awaitEachGesture {
+                awaitFirstDown(requireUnconsumed = false)
+                latch.reset()
+                var pressed: Boolean
+                do {
+                    pressed = awaitPointerEvent().changes.any { it.pressed }
+                } while (pressed)
+            }
+        }
+}
+
 @Composable
 private fun CollectionSwipeRow(
     canRemove: Boolean, enabled: Boolean = true,
@@ -707,19 +849,15 @@ private fun CollectionSwipeRow(
     val removeAction by rememberUpdatedState(onRemove)
     val playNextAllowed by rememberUpdatedState(allowPlayNext)
     val removeAllowed by rememberUpdatedState(canRemove)
-    val dismiss = rememberSwipeToDismissBoxState(
-        confirmValueChange = { value ->
-            when (value) {
-                SwipeToDismissBoxValue.StartToEnd -> if (playNextAllowed) playNextAction()
-                SwipeToDismissBoxValue.EndToStart -> if (removeAllowed) removeAction?.invoke()
-                SwipeToDismissBoxValue.Settled -> Unit
-            }
-            false
-        },
-        positionalThreshold = { it * 0.82f },
-    )
+    val (dismiss, swipeModifier) = rememberDeliberateDismissState { value ->
+        when (value) {
+            SwipeToDismissBoxValue.StartToEnd -> if (playNextAllowed) playNextAction()
+            SwipeToDismissBoxValue.EndToStart -> if (removeAllowed) removeAction?.invoke()
+            SwipeToDismissBoxValue.Settled -> Unit
+        }
+    }
     SwipeToDismissBox(
-        state = dismiss, modifier = modifier,
+        state = dismiss, modifier = modifier.then(swipeModifier),
         enableDismissFromStartToEnd = enabled && allowPlayNext,
         enableDismissFromEndToStart = enabled && canRemove,
         backgroundContent = {
@@ -752,9 +890,13 @@ private fun CollectionSwipeRow(
 @Composable
 private fun CollectionTrackRow(
     song: Song, trackNumber: Int?, showArtist: Boolean, client: SubsonicClient,
-    onPlay: (Song) -> Unit, editing: Boolean = false, onMore: () -> Unit,
+    onPlay: (Song) -> Unit, editing: Boolean = false,
+    dividerAbove: Boolean = true, onMore: () -> Unit,
 ) {
     val quiet = MaterialTheme.colorScheme.onSurfaceVariant
+    if (dividerAbove) Box(Modifier.fillMaxWidth()
+        .padding(start = if (showArtist) 76.dp else 55.dp, end = 18.dp).height(1.dp)
+        .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f)))
     Row(Modifier.fillMaxWidth().height(62.dp)
         .then(if (editing) Modifier else Modifier.clickable { onPlay(song) })
         .padding(start = 20.dp, end = 9.dp),
@@ -787,8 +929,6 @@ private fun CollectionTrackRow(
             Icon(MaterialSymbols.RoundedFilled.More_vert, "Options for ${song.title}", tint = quiet)
         }
     }
-    Box(Modifier.fillMaxWidth().padding(start = if (showArtist) 76.dp else 55.dp, end = 18.dp).height(1.dp)
-        .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f)))
 }
 
 @Composable
@@ -844,20 +984,63 @@ private fun SimilarAlbumsLoading() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun CollectionSongSheet(
+private fun AlbumArtistSheet(
+    artists: List<Artist>, artworkId: String?, client: SubsonicClient,
+    onDismiss: () -> Unit, onArtist: (Artist) -> Unit,
+) {
+    var choices by remember(artists) { mutableStateOf(artists) }
+    LaunchedEffect(artists, client) {
+        val library = try { client.artists().associateBy { it.id } }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { emptyMap() }
+        choices = artists.map { library[it.id] ?: it }
+        choices.filter { it.imageUrl == null }.forEach { artist ->
+            val url = try { client.artistImageUrl(artist.id) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { null }
+            if (url != null) choices = choices.map {
+                if (it.id == artist.id) it.copy(imageUrl = url) else it
+            }
+        }
+    }
+    ModalBottomSheet(onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        sheetGesturesEnabled = false, containerColor = Color.Transparent,
+        contentColor = Color.White, scrimColor = Color.Black.copy(alpha = 0.28f),
+        dragHandle = null, contentWindowInsets = { WindowInsets(0, 0, 0, 0) },
+        shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp)) {
+        PlayerSheetSurface(artworkId?.let { client.coverArtUrl(it, 600) }, Modifier.fillMaxWidth()) {
+            Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 24.dp)) {
+                SheetHandle()
+                Text("GO TO ARTIST", color = Color.LightGray,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontWeight = FontWeight.SemiBold, letterSpacing = 1.2.sp),
+                    modifier = Modifier.padding(start = 26.dp, top = 22.dp, bottom = 12.dp))
+                Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(Color.White.copy(alpha = 0.09f))) {
+                    choices.forEach { artist ->
+                        CollectionArtistOptionRow(artist) { onArtist(artist) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun CollectionSongSheet(
     song: Song, client: SubsonicClient,
     onDismiss: () -> Unit, onPlayNext: () -> Unit,
     onAlbum: ((Album) -> Unit)? = null, onArtist: (Artist) -> Unit,
     albumArtists: List<Artist> = emptyList(),
+    onShare: ((Song) -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
     var showPlaylists by remember(song.id) { mutableStateOf(false) }
     var showArtists by remember(song.id) { mutableStateOf(false) }
-    var artistChoices by remember(song.id) {
-        mutableStateOf(albumArtists.ifEmpty {
-            song.artistId?.let { listOf(Artist(it, song.artist)) }.orEmpty()
-        })
-    }
+    var artistChoices by remember(song.id) { mutableStateOf(albumArtists) }
     var playlists by remember(song.id) { mutableStateOf(emptyList<Playlist>()) }
     var loading by remember(song.id) { mutableStateOf(false) }
     var message by remember(song.id) { mutableStateOf<String?>(null) }
@@ -881,7 +1064,7 @@ private fun CollectionSongSheet(
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { emptyMap() }
             artistChoices = artistChoices.map { library[it.id] ?: it }
-            artistChoices.filter { it.coverArt == null && it.imageUrl == null }.forEach { artist ->
+            artistChoices.filter { it.imageUrl == null }.forEach { artist ->
                 val url = try { client.artistImageUrl(artist.id) }
                 catch (cancelled: CancellationException) { throw cancelled }
                 catch (_: Exception) { null }
@@ -942,7 +1125,7 @@ private fun CollectionSongSheet(
                     showArtists = false
                 }
                 artistChoices.forEach { artist ->
-                    CollectionArtistOptionRow(artist, client) {
+                    CollectionArtistOptionRow(artist) {
                         onDismiss(); onArtist(artist)
                     }
                 }
@@ -982,6 +1165,9 @@ private fun CollectionSongSheet(
                             onDismiss(); onArtist(artistChoices.first())
                         } else showArtists = true
                     }
+                if (onShare != null) SongOptionRow(MaterialSymbols.RoundedFilled.Share, "Share") {
+                    onDismiss(); onShare(song)
+                }
                 SongOptionRow(MaterialSymbols.RoundedFilled.Favorite,
                     if (favorite) "Remove from favorites" else "Add to favorites") {
                     val next = !favorite
@@ -1000,10 +1186,8 @@ private fun CollectionSongSheet(
 }
 
 @Composable
-private fun CollectionArtistOptionRow(artist: Artist, client: SubsonicClient, onClick: () -> Unit) {
-    val imageUrl = remember(client, artist.coverArt, artist.imageUrl) {
-        artist.coverArt?.let { client.coverArtUrl(it, 160) } ?: artist.imageUrl
-    }
+private fun CollectionArtistOptionRow(artist: Artist, onClick: () -> Unit) {
+    val imageUrl = artist.imageUrl
     Row(Modifier.fillMaxWidth().clickable(onClick = onClick)
         .padding(horizontal = 26.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically) {

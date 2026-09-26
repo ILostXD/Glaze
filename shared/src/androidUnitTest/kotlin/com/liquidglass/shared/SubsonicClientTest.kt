@@ -177,6 +177,38 @@ class SubsonicClientTest {
         } finally { client.close() }
     }
 
+    @Test fun artistPageUsesServerPortraitTopSongsAndReleaseTypes() = runBlocking {
+        val engine = MockEngine { request ->
+            val response = when (request.url.encodedPath.substringAfterLast('/')) {
+                "getArtistInfo2.view" -> """{"subsonic-response":{"status":"ok","artistInfo2":{"largeImageUrl":"https://example.test/portrait.jpg","biography":"An artist","similarArtist":[{"id":"friend","name":"Friend"}]}}}"""
+                "getTopSongs.view" -> {
+                    assertEquals("Artist", request.url.parameters["artist"])
+                    """{"subsonic-response":{"status":"ok","topSongs":{"song":[{"id":"hit","title":"Hit"}]}}}"""
+                }
+                "getArtist.view" -> """{"subsonic-response":{"status":"ok","artist":{"id":"a1","name":"Artist","starred":"2026-09-01","album":[{"id":"new","name":"Newest","songCount":10,"year":2026,"releaseDate":{"year":2026,"month":6,"day":1},"releaseTypes":["Album"]},{"id":"single","name":"Track","songCount":1,"releaseTypes":["Single"]}]}}}"""
+                "star.view" -> {
+                    assertEquals("a1", request.url.parameters["artistId"])
+                    """{"subsonic-response":{"status":"ok"}}"""
+                }
+                else -> error("Unexpected endpoint")
+            }
+            respond(response, headers = headersOf(HttpHeaders.ContentType, "application/json"))
+        }
+        val client = SubsonicClient(credentials, HttpClient(engine))
+        try {
+            assertTrue(requireNotNull(client.artistDetails("a1")).starred)
+            val albums = client.artistAlbums("a1")
+            assertEquals(20260601, albums.first().releaseOrder)
+            assertEquals(listOf("Album"), albums.first().releaseTypes)
+            assertEquals(false, isSingleOrEp(albums.first()))
+            assertTrue(isSingleOrEp(albums.last()))
+            assertEquals("https://example.test/portrait.jpg", client.artistInfo("a1").imageUrl)
+            assertEquals("Friend", client.artistInfo("a1").similarArtists.single().name)
+            assertEquals("Hit", client.artistTopSongs("Artist").single().title)
+            client.setArtistStarred("a1", true)
+        } finally { client.close() }
+    }
+
     @Test fun addsSongToSelectedPlaylist() = runBlocking {
         val engine = MockEngine { request ->
             assertEquals("updatePlaylist.view", request.url.encodedPath.substringAfterLast('/'))

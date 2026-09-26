@@ -175,6 +175,7 @@ internal fun ReferencePlayerScreen(
     client: SubsonicClient,
     song: Song,
     isPlaying: Boolean,
+    isBuffering: Boolean,
     playerColor: Color,
     playerBackdropColor: Color,
     positionMs: Long,
@@ -327,7 +328,7 @@ internal fun ReferencePlayerScreen(
                                 Spacer(Modifier.height(12.dp))
                                 PlayerProgress(detailedSong ?: song, livePosition, liveDuration, isPlaying, accent, onSeek)
                                 Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                                    TransportControls(isPlaying, onToggle, onPrevious, onNext)
+                                    TransportControls(isPlaying, isBuffering, onToggle, onPrevious, onNext)
                                 }
                             }
                         }
@@ -625,6 +626,7 @@ private fun PlayerProgress(
 @Composable
 private fun TransportControls(
     isPlaying: Boolean,
+    isBuffering: Boolean,
     onToggle: () -> Unit, onPrevious: () -> Unit, onNext: () -> Unit,
 ) {
     Row(
@@ -642,7 +644,10 @@ private fun TransportControls(
                 interactionSource = playInteraction, indication = null, role = Role.Button,
                 onClick = onToggle,
             ), contentAlignment = Alignment.Center) {
-            Icon(if (isPlaying) MaterialSymbols.RoundedFilled.Pause else MaterialSymbols.RoundedFilled.Play_arrow,
+            if (isBuffering) CircularProgressIndicator(Modifier.size(48.dp)
+                .semantics { contentDescription = "Loading track" },
+                color = playerWhite, strokeWidth = 5.dp)
+            else Icon(if (isPlaying) MaterialSymbols.RoundedFilled.Pause else MaterialSymbols.RoundedFilled.Play_arrow,
                 contentDescription = if (isPlaying) "Pause" else "Play", tint = playerWhite,
                 modifier = Modifier.size(64.dp))
         }
