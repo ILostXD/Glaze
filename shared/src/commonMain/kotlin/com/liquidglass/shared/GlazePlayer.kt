@@ -62,6 +62,10 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
@@ -185,6 +189,7 @@ internal fun ReferencePlayerScreen(
     onDismiss: () -> Unit,
     onPlayQueueIndex: (Int) -> Unit,
     onRemoveFromQueue: (Int) -> Unit,
+    onRestoreQueueItem: (Song, Int) -> Unit,
     onMoveInQueue: (Int, Int) -> Unit,
     onViewAlbum: (Song) -> Unit,
     onViewArtist: (Artist) -> Unit,
@@ -370,7 +375,8 @@ internal fun ReferencePlayerScreen(
                 QueueContents(
                     client, queue, currentIndex, isPlaying, artUrl, onClearUpcoming,
                     onPlay = { index -> onPlayQueueIndex(index); queueOpen = false },
-                    onRemove = onRemoveFromQueue, onMove = onMoveInQueue,
+                    onRemove = onRemoveFromQueue, onRestore = onRestoreQueueItem,
+                    onMove = onMoveInQueue,
                 )
             }
         }
@@ -844,7 +850,8 @@ private fun WaitingDots(modifier: Modifier = Modifier) {
 private fun QueueContents(
     client: SubsonicClient, queue: List<Song>, currentIndex: Int,
     isPlaying: Boolean, artUrl: String?, onClearUpcoming: () -> Unit,
-    onPlay: (Int) -> Unit, onRemove: (Int) -> Unit, onMove: (Int, Int) -> Unit,
+    onPlay: (Int) -> Unit, onRemove: (Int) -> Unit,
+    onRestore: (Song, Int) -> Unit, onMove: (Int, Int) -> Unit,
 ) {
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = currentIndex.coerceIn(0, (queue.size - 1).coerceAtLeast(0)))
     var query by remember { mutableStateOf("") }
@@ -902,7 +909,10 @@ private fun QueueContents(
     }
     val remaining = queue.drop(currentIndex.coerceAtLeast(0))
     val duration = remaining.sumOf { it.durationSeconds.toLong() }
+    val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
     PlayerSheetSurface(artUrl, Modifier.fillMaxSize()) {
+    Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize().navigationBarsPadding()) {
         SheetHandle()
         Row(Modifier.fillMaxWidth().padding(start = 22.dp, end = 22.dp, top = 10.dp, bottom = 12.dp),
@@ -990,12 +1000,19 @@ private fun QueueContents(
             }
             items(visibleRows, key = { "${it.value.id}:${it.index}" }) { (index, rowSong) ->
                 val dragging = draggingIndex == index
-                val dismiss = rememberSwipeToDismissBoxState()
+                val dismiss = rememberSwipeToDismissBoxState(positionalThreshold = { it * 0.82f })
                 LaunchedEffect(dismiss.currentValue) {
                     when (dismiss.currentValue) {
                         SwipeToDismissBoxValue.StartToEnd -> if (index != currentIndex)
                             onMove(index, playNextQueueIndex(index, currentIndex))
-                        SwipeToDismissBoxValue.EndToStart -> if (index != currentIndex) onRemove(index)
+                        SwipeToDismissBoxValue.EndToStart -> if (index != currentIndex) {
+                            onRemove(index)
+                            scope.launch {
+                                if (snackbar.showSnackbar("${rowSong.title} was deleted", "Restore",
+                                        duration = SnackbarDuration.Short) == SnackbarResult.ActionPerformed)
+                                    onRestore(rowSong, index)
+                            }
+                        }
                         SwipeToDismissBoxValue.Settled -> return@LaunchedEffect
                     }
                     dismiss.reset()
@@ -1045,6 +1062,9 @@ private fun QueueContents(
                 }
             }
         }
+    }
+    SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter)
+        .navigationBarsPadding().padding(bottom = 12.dp))
     }
     }
 }

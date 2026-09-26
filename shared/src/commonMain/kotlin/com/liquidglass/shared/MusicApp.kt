@@ -59,6 +59,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -78,7 +82,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableFloatStateOf
@@ -198,6 +201,7 @@ fun MusicApp(
     onShareCollection: (String) -> Unit,
     onArtworkColor: suspend (String?) -> Color,
     onRemoveFromQueue: (Int) -> Unit,
+    onRestoreQueueItem: (Song, Int) -> Unit,
     onMoveInQueue: (Int, Int) -> Unit,
     onPlayQueueIndex: (Int) -> Unit,
     onShuffleSongs: (List<Song>) -> Unit,
@@ -296,7 +300,7 @@ fun MusicApp(
                 LibraryScreen(client, nowPlaying, isPlaying, playerColor, playerBackdropColor, queue, currentIndex, positionMs,
                     durationMs, onPlay, onTogglePlayback, onSkipNext, onSkipPrevious, onSeek,
                     onAddNext, onAddToQueue, onShareSong, onShareCollection, onArtworkColor,
-                    onRemoveFromQueue, onMoveInQueue, onPlayQueueIndex,
+                    onRemoveFromQueue, onRestoreQueueItem, onMoveInQueue, onPlayQueueIndex,
                     onShuffleSongs, onDisconnect, settings, onSettingsChange, onReadPosition,
                     darkMode = darkMode,
                     onLightSystemBars = onLightSystemBars,
@@ -386,6 +390,7 @@ private fun LibraryScreen(
     onShareCollection: (String) -> Unit,
     onArtworkColor: suspend (String?) -> Color,
     onRemoveFromQueue: (Int) -> Unit,
+    onRestoreQueueItem: (Song, Int) -> Unit,
     onMoveInQueue: (Int, Int) -> Unit,
     onPlayQueueIndex: (Int) -> Unit,
     onShuffleSongs: (List<Song>) -> Unit,
@@ -506,7 +511,10 @@ private fun LibraryScreen(
         }
     }
 
-    val chromeSky = key(tab, detail) { rememberSky() }
+    val chromeSky = rememberSky()
+    LaunchedEffect(tab, detail, loading, songs, artists, playlists, results) {
+        chromeSky.invalidate(durationMillis = 240)
+    }
     val chromeSpace = if (nowPlaying == null) 120.dp else when (settings.miniPlayerSize) {
         MiniPlayerSize.Small -> 180.dp
         MiniPlayerSize.Medium -> 194.dp
@@ -565,8 +573,9 @@ private fun LibraryScreen(
             }
         }
     } else {
+    Box(Modifier.fillMaxSize().sky(chromeSky)) {
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
-        .sky(chromeSky).statusBarsPadding().padding(top = 20.dp)) {
+        .statusBarsPadding().padding(top = 20.dp)) {
         AppToolbar(
             title = when (val page = detail) {
                 is Detail.ArtistPage -> page.artist.name
@@ -596,7 +605,7 @@ private fun LibraryScreen(
                     openDetail(Detail.AlbumPage(it))
                 }
                 Detail.QueuePage -> QueueScreen(queue, currentIndex, client,
-                    onPlayQueueIndex, onRemoveFromQueue, onMoveInQueue, onAddNext, onAddToQueue,
+                    onPlayQueueIndex, onRemoveFromQueue, onRestoreQueueItem, onMoveInQueue, onAddNext, onAddToQueue,
                     chromeSpace)
                 Detail.SettingsPage -> SettingsScreen(settings, onSettingsChange, onDisconnect, chromeSpace)
                 null -> when (tab) {
@@ -609,6 +618,7 @@ private fun LibraryScreen(
                 }
             }
         }
+    }
     }
     }
     ReferenceChrome(
@@ -645,7 +655,7 @@ private fun LibraryScreen(
             ReferencePlayerScreen(
                 client, song, isPlaying, playerColor, playerBackdropColor, positionMs, durationMs,
                 queue, currentIndex, settings, onTogglePlayback, onSkipNext, onSkipPrevious,
-                onSeek, { playerExpanded = false }, onPlayQueueIndex, onRemoveFromQueue,
+                onSeek, { playerExpanded = false }, onPlayQueueIndex, onRemoveFromQueue, onRestoreQueueItem,
                 onMoveInQueue,
                 onViewAlbum = { selected ->
                     selected.albumId?.let { id ->
@@ -1319,6 +1329,7 @@ private fun QueueScreen(
     client: SubsonicClient,
     onSelect: (Int) -> Unit,
     onRemove: (Int) -> Unit,
+    onRestore: (Song, Int) -> Unit,
     onMove: (Int, Int) -> Unit,
     onAddNext: (Song) -> Unit,
     onAddToQueue: (Song) -> Unit,
@@ -1331,6 +1342,8 @@ private fun QueueScreen(
         return
     }
     val rowHeightPx = with(LocalDensity.current) { 72.dp.toPx() }
+    val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
     var removalLocked by remember { mutableStateOf(false) }
     LaunchedEffect(removalLocked) {
         if (removalLocked) {
@@ -1338,6 +1351,7 @@ private fun QueueScreen(
             removalLocked = false
         }
     }
+    Box(Modifier.fillMaxSize()) {
     LazyColumn(contentPadding = PaddingValues(bottom = bottomPadding)) {
         items(queue.size, key = { "${queue[it].id}:$it" }) { index ->
             val song = queue[index]
@@ -1373,9 +1387,14 @@ private fun QueueScreen(
                 if (value == SwipeToDismissBoxValue.EndToStart && index != currentIndex && !removalLocked) {
                     removalLocked = true
                     onRemove(index)
+                    scope.launch {
+                        if (snackbar.showSnackbar("${song.title} was deleted", "Restore",
+                                duration = SnackbarDuration.Short) == SnackbarResult.ActionPerformed)
+                            onRestore(song, index)
+                    }
                 }
                 false
-            })
+            }, positionalThreshold = { it * 0.82f })
             SwipeToDismissBox(
                 state = dismissState,
                 enableDismissFromStartToEnd = false,
@@ -1395,6 +1414,8 @@ private fun QueueScreen(
                     onAddNext = { onAddNext(song) }, onAddToQueue = { onAddToQueue(song) })
             }
         }
+    }
+    SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = bottomPadding))
     }
 }
 

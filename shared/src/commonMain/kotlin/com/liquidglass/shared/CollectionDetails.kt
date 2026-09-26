@@ -6,6 +6,7 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
@@ -43,6 +44,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
@@ -56,6 +61,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -65,6 +71,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.input.pointer.pointerInput
@@ -81,6 +88,8 @@ import com.composables.icons.materialsymbols.MaterialSymbols
 import com.composables.icons.materialsymbols.roundedfilled.Album
 import com.composables.icons.materialsymbols.roundedfilled.Arrow_back
 import com.composables.icons.materialsymbols.roundedfilled.Chevron_right
+import com.composables.icons.materialsymbols.roundedfilled.Check
+import com.composables.icons.materialsymbols.roundedfilled.Close
 import com.composables.icons.materialsymbols.roundedfilled.Delete
 import com.composables.icons.materialsymbols.roundedfilled.Drag_handle
 import com.composables.icons.materialsymbols.roundedfilled.Edit
@@ -91,6 +100,7 @@ import com.composables.icons.materialsymbols.roundedfilled.Play_arrow
 import com.composables.icons.materialsymbols.roundedfilled.Playlist_add
 import com.composables.icons.materialsymbols.roundedfilled.Queue_music
 import com.composables.icons.materialsymbols.roundedfilled.Share
+import com.composables.icons.materialsymbols.roundedfilled.Search
 import com.composables.icons.materialsymbols.roundedfilled.Shuffle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
@@ -238,11 +248,13 @@ internal fun PlaylistReferenceScreen(
     var editing by remember(playlist.id) { mutableStateOf(false) }
     var saving by remember(playlist.id) { mutableStateOf(false) }
     var editError by remember(playlist.id) { mutableStateOf<String?>(null) }
+    var searchQuery by remember(playlist.id) { mutableStateOf("") }
+    val snackbar = remember(playlist.id) { SnackbarHostState() }
     var previewOrder by remember(playlist.id) { mutableStateOf<List<Int>?>(null) }
     var draggingIndex by remember { mutableStateOf<Int?>(null) }
     var dragY by remember { mutableFloatStateOf(0f) }
     var dragPointerY by remember { mutableFloatStateOf(0f) }
-    LaunchedEffect(songs) { if (!saving && draggingIndex == null) orderedSongs = songs }
+    LaunchedEffect(songs) { if (!editing && !saving && draggingIndex == null) orderedSongs = songs }
     val rowHeightPx = with(LocalDensity.current) { 63.dp.toPx() }
     val edgePx = with(LocalDensity.current) { 72.dp.toPx() }
     val scrollStepPx = with(LocalDensity.current) { 14.dp.toPx() }
@@ -311,26 +323,8 @@ internal fun PlaylistReferenceScreen(
                 previewOrder = null
                 if (from != null && to != null && to != from) {
                     val before = orderedSongs
-                    val updated = queuePreviewMoved(before.indices.toList(), from, to)
+                    orderedSongs = queuePreviewMoved(before.indices.toList(), from, to)
                         .map { before[it] }
-                    orderedSongs = updated
-                    scope.launch {
-                        saving = true
-                        try {
-                            client.replacePlaylistSongs(playlist.id, updated)
-                            val saved = client.playlistSongs(playlist.id)
-                            orderedSongs = saved
-                            onPlaylistChanged()
-                            editError = if (saved.map { it.id } == updated.map { it.id }) null
-                                else "Server did not keep the requested order"
-                        } catch (cancelled: CancellationException) { throw cancelled }
-                        catch (_: Exception) {
-                            orderedSongs = try { client.playlistSongs(playlist.id) }
-                                catch (_: Exception) { before }
-                            onPlaylistChanged()
-                            editError = "Could not save playlist order"
-                        } finally { saving = false }
-                    }
                 }
             },
             onDragCancel = { draggingIndex = null; dragY = 0f; previewOrder = null },
@@ -338,6 +332,9 @@ internal fun PlaylistReferenceScreen(
     } else Modifier
     val visibleRows = (previewOrder ?: orderedSongs.indices.toList())
         .map { IndexedValue(it, orderedSongs[it]) }
+        .filter { (_, song) -> searchQuery.isBlank() ||
+            song.title.contains(searchQuery, ignoreCase = true) ||
+            song.artist.contains(searchQuery, ignoreCase = true) }
     LaunchedEffect(client, playlist.id, songs) {
         val inPlaylist = songs.mapTo(mutableSetOf()) { it.id }
         recommendations = songs.take(3).flatMap { seed ->
@@ -349,7 +346,61 @@ internal fun PlaylistReferenceScreen(
     val artworkId = playlist.coverArt ?: orderedSongs.firstOrNull()?.coverArt
     CollectionSurface(playlist.name, artworkId, darkMode, onArtworkColor, onBack,
         onShare = { onShare(playlist.name) }, listState = listState, listModifier = dragModifier,
-        onEdit = { editing = !editing; editError = null }, editing = editing) {
+        onEdit = { searchQuery = ""; editing = true; editError = null }, editing = editing,
+        onCancel = {
+            if (!saving) {
+                snackbar.currentSnackbarData?.dismiss()
+                orderedSongs = songs
+                editing = false
+                editError = null
+            }
+        },
+        onDone = {
+            if (!saving) scope.launch {
+                snackbar.currentSnackbarData?.dismiss()
+                if (orderedSongs.map { it.id } == songs.map { it.id }) {
+                    editing = false
+                } else {
+                    saving = true
+                    try {
+                        client.replacePlaylistSongs(playlist.id, orderedSongs)
+                        val saved = client.playlistSongs(playlist.id)
+                        if (saved.map { it.id } == orderedSongs.map { it.id }) {
+                            orderedSongs = saved
+                            editing = false
+                            editError = null
+                            onPlaylistChanged()
+                        } else editError = "Server did not keep the requested changes"
+                    } catch (cancelled: CancellationException) { throw cancelled }
+                    catch (_: Exception) { editError = "Could not save playlist changes" }
+                    finally { saving = false }
+                }
+            }
+        }, snackbar = snackbar, headerItemIndex = 3) {
+        item { if (!editing) {
+            BasicTextField(searchQuery, onValueChange = { searchQuery = it },
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyMedium.copy(
+                    color = MaterialTheme.colorScheme.onBackground),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.onBackground),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 8.dp)
+                    .clip(RoundedCornerShape(9.dp))
+                    .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f))
+                    .padding(horizontal = 15.dp, vertical = 13.dp),
+                decorationBox = { field ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(MaterialSymbols.RoundedFilled.Search, null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.width(10.dp))
+                        Box {
+                            if (searchQuery.isEmpty()) Text("Find in playlist",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            field()
+                        }
+                    }
+                })
+        } }
+        item { Spacer(Modifier.height(32.dp)) }
         item {
             CollectionHeader(
                 playlist.name, "Playlist",
@@ -364,23 +415,18 @@ internal fun PlaylistReferenceScreen(
         }
         item { CollectionDivider() }
         items(visibleRows, key = { "playlist-track:${it.index}" }) { (index, song) ->
-            CollectionSwipeRow(true, enabled = !editing && !saving,
+            CollectionSwipeRow(editing, enabled = !saving, allowPlayNext = !editing,
                 onPlayNext = { onAddNext(song) }, onRemove = {
-                    if (!saving) scope.launch {
-                        saving = true
-                        try {
-                            client.removeSongFromPlaylist(playlist.id, index)
-                            orderedSongs = client.playlistSongs(playlist.id)
-                            onPlaylistChanged()
-                            editError = null
-                        } catch (cancelled: CancellationException) { throw cancelled }
-                        catch (_: Exception) {
-                            orderedSongs = try { client.playlistSongs(playlist.id) }
-                                catch (_: Exception) { orderedSongs }
-                            onPlaylistChanged()
-                            editError = "Could not remove song"
+                    if (editing && !saving && index in orderedSongs.indices) {
+                        orderedSongs = orderedSongs.toMutableList().apply { removeAt(index) }
+                        scope.launch {
+                            if (snackbar.showSnackbar("${song.title} was deleted", "Restore",
+                                    duration = SnackbarDuration.Short) == SnackbarResult.ActionPerformed && editing) {
+                                orderedSongs = orderedSongs.toMutableList().apply {
+                                    add(index.coerceAtMost(size), song)
+                                }
+                            }
                         }
-                        finally { saving = false }
                     }
                 }, modifier = Modifier.animateItem(
                     fadeInSpec = null, fadeOutSpec = null,
@@ -391,7 +437,11 @@ internal fun PlaylistReferenceScreen(
                     editing = editing, onMore = { selectedSong = song })
             }
         }
-        if (recommendations.isNotEmpty()) {
+        if (searchQuery.isNotBlank() && visibleRows.isEmpty()) item {
+            Text("No matching songs", color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(22.dp))
+        }
+        if (recommendations.isNotEmpty() && searchQuery.isBlank()) {
             item {
                 Text("Recommended songs", color = MaterialTheme.colorScheme.onBackground,
                     style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.SemiBold),
@@ -448,9 +498,12 @@ private fun CollectionSurface(
     onBack: () -> Unit, onShare: () -> Unit,
     listState: LazyListState = rememberLazyListState(), listModifier: Modifier = Modifier,
     onEdit: (() -> Unit)? = null, editing: Boolean = false,
+    onCancel: (() -> Unit)? = null, onDone: (() -> Unit)? = null,
+    snackbar: SnackbarHostState? = null,
+    headerItemIndex: Int = 1,
     content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit,
 ) {
-    val titleIsPast by remember { derivedStateOf { listState.firstVisibleItemIndex > 1 } }
+    val titleIsPast by remember { derivedStateOf { listState.firstVisibleItemIndex > headerItemIndex } }
     var sampled by remember(artworkId) { mutableStateOf(Color(0xFF626262)) }
     LaunchedEffect(artworkId) {
         sampled = try { onArtworkColor(artworkId) }
@@ -469,7 +522,7 @@ private fun CollectionSurface(
         Box(Modifier.fillMaxSize().drawWithCache {
             val brush = Brush.radialGradient(
                 0f to glow, 1f to base,
-                center = Offset(size.width * 0.5f, size.height * 0.27f),
+                center = Offset(size.width * 0.5f, 290.dp.toPx()),
                 radius = size.width * 0.86f,
             )
             onDrawBehind { drawRect(brush) }
@@ -479,32 +532,44 @@ private fun CollectionSurface(
             item { Spacer(Modifier.height(104.dp)) }
             content()
         }
-        Row(Modifier.fillMaxWidth()
-            .background(barColor)
-            .statusBarsPadding().padding(start = 12.dp, end = 12.dp, top = 8.dp),
-            verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) {
+        Box(Modifier.fillMaxWidth().background(barColor).statusBarsPadding()
+            .padding(start = 12.dp, end = 12.dp, top = 8.dp)) {
+            IconButton(onClick = onBack, modifier = Modifier.align(Alignment.CenterStart)) {
                 Icon(MaterialSymbols.RoundedFilled.Arrow_back, "Back",
                     tint = MaterialTheme.colorScheme.onBackground)
             }
-            Box(Modifier.weight(1f).padding(horizontal = 8.dp), contentAlignment = Alignment.Center) {
+            Box(Modifier.fillMaxWidth().align(Alignment.Center).padding(horizontal = 112.dp),
+                contentAlignment = Alignment.Center) {
                 Crossfade(titleIsPast, animationSpec = tween(140), label = "Collection title") { visible ->
                     if (visible) Text(title, color = MaterialTheme.colorScheme.onBackground,
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
                         textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
-            IconButton(onClick = onShare) {
-                Icon(MaterialSymbols.RoundedFilled.Share, "Share",
-                    tint = MaterialTheme.colorScheme.onBackground)
-            }
-            if (onEdit != null) IconButton(onClick = onEdit) {
-                if (editing) Text("Done", color = MaterialTheme.colorScheme.onBackground,
-                    style = MaterialTheme.typography.labelLarge)
-                else Icon(MaterialSymbols.RoundedFilled.Edit, "Edit playlist",
-                    tint = MaterialTheme.colorScheme.onBackground)
+            Row(Modifier.align(Alignment.CenterEnd), verticalAlignment = Alignment.CenterVertically) {
+                if (editing) {
+                    IconButton(onClick = { onCancel?.invoke() }) {
+                        Icon(MaterialSymbols.RoundedFilled.Close, "Cancel edits",
+                            tint = MaterialTheme.colorScheme.onBackground)
+                    }
+                    IconButton(onClick = { onDone?.invoke() }) {
+                        Icon(MaterialSymbols.RoundedFilled.Check, "Save edits",
+                            tint = MaterialTheme.colorScheme.onBackground)
+                    }
+                } else {
+                    IconButton(onClick = onShare) {
+                        Icon(MaterialSymbols.RoundedFilled.Share, "Share",
+                            tint = MaterialTheme.colorScheme.onBackground)
+                    }
+                    if (onEdit != null) IconButton(onClick = onEdit) {
+                        Icon(MaterialSymbols.RoundedFilled.Edit, "Edit playlist",
+                            tint = MaterialTheme.colorScheme.onBackground)
+                    }
+                }
             }
         }
+        if (snackbar != null) SnackbarHost(snackbar,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 190.dp))
     }
 }
 
@@ -634,21 +699,28 @@ private fun CollectionDivider() {
 @Composable
 private fun CollectionSwipeRow(
     canRemove: Boolean, enabled: Boolean = true,
+    allowPlayNext: Boolean = true,
     onPlayNext: () -> Unit, onRemove: (() -> Unit)? = null,
     modifier: Modifier = Modifier, content: @Composable () -> Unit,
 ) {
-    val dismiss = rememberSwipeToDismissBoxState()
-    LaunchedEffect(dismiss.currentValue) {
-        when (dismiss.currentValue) {
-            SwipeToDismissBoxValue.StartToEnd -> onPlayNext()
-            SwipeToDismissBoxValue.EndToStart -> if (canRemove) onRemove?.invoke()
-            SwipeToDismissBoxValue.Settled -> return@LaunchedEffect
-        }
-        dismiss.reset()
-    }
+    val playNextAction by rememberUpdatedState(onPlayNext)
+    val removeAction by rememberUpdatedState(onRemove)
+    val playNextAllowed by rememberUpdatedState(allowPlayNext)
+    val removeAllowed by rememberUpdatedState(canRemove)
+    val dismiss = rememberSwipeToDismissBoxState(
+        confirmValueChange = { value ->
+            when (value) {
+                SwipeToDismissBoxValue.StartToEnd -> if (playNextAllowed) playNextAction()
+                SwipeToDismissBoxValue.EndToStart -> if (removeAllowed) removeAction?.invoke()
+                SwipeToDismissBoxValue.Settled -> Unit
+            }
+            false
+        },
+        positionalThreshold = { it * 0.82f },
+    )
     SwipeToDismissBox(
         state = dismiss, modifier = modifier,
-        enableDismissFromStartToEnd = enabled,
+        enableDismissFromStartToEnd = enabled && allowPlayNext,
         enableDismissFromEndToStart = enabled && canRemove,
         backgroundContent = {
             when (dismiss.dismissDirection) {
@@ -670,7 +742,11 @@ private fun CollectionSwipeRow(
                 SwipeToDismissBoxValue.Settled -> Unit
             }
         },
-    ) { content() }
+    ) {
+        Box(Modifier.fillMaxWidth().background(
+            if (dismiss.dismissDirection != SwipeToDismissBoxValue.Settled)
+                MaterialTheme.colorScheme.background else Color.Transparent)) { content() }
+    }
 }
 
 @Composable

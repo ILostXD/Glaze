@@ -367,7 +367,8 @@ internal fun BoxScope.ReferenceChrome(
                     .combinedClickable(onClick = onExpandPlayer,
                         onLongClick = if (settings.gestures.miniPlayerLongPress)
                             ({ menuOpen = true }) else null)
-                    .padding(horizontal = if (settings.miniPlayerSize == MiniPlayerSize.Large) 12.dp else 10.dp),
+                    .padding(start = if (settings.miniPlayerSize == MiniPlayerSize.Large) 16.dp else 14.dp,
+                        end = if (settings.miniPlayerSize == MiniPlayerSize.Large) 12.dp else 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 AlbumImage(client, song.coverArt,

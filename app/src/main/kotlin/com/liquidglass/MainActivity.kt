@@ -274,6 +274,13 @@ class MainActivity : ComponentActivity() {
                     else withContext(Dispatchers.IO) { sampleArtworkColors(account, artworkId).first }
                 },
                 onRemoveFromQueue = { index -> controller?.removeMediaItem(index) },
+                onRestoreQueueItem = { song, index ->
+                    val player = controller
+                    val account = credentials.value
+                    if (player != null && account != null)
+                        player.addMediaItem(index.coerceIn(0, player.mediaItemCount),
+                            SubsonicClient(account).use { song.toMediaItem(it) })
+                },
                 onMoveInQueue = { from, to -> controller?.moveMediaItem(from, to) },
                 onPlayQueueIndex = { index ->
                     controller?.seekToDefaultPosition(index)
