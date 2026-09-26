@@ -10,6 +10,8 @@ import com.composables.icons.materialsymbols.roundedfilled.Play_arrow
 import com.composables.icons.materialsymbols.roundedfilled.Playlist_play
 import com.composables.icons.materialsymbols.roundedfilled.Queue_music
 import com.composables.icons.materialsymbols.roundedfilled.Search
+import com.composables.icons.materialsymbols.roundedfilled.Check
+import com.composables.icons.materialsymbols.roundedfilled.Keyboard_arrow_down
 import com.composables.icons.materialsymbols.roundedfilled.Settings
 import com.composables.icons.materialsymbols.roundedfilled.Skip_next
 import com.composables.icons.materialsymbols.roundedfilled.Skip_previous
@@ -22,6 +24,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -34,6 +37,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -52,12 +56,18 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
@@ -74,6 +84,7 @@ import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Slider
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
@@ -97,10 +108,12 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.TextAlign
 import org.jetbrains.compose.resources.Font
 import org.jetbrains.compose.resources.painterResource
 import com.liquidglass.shared.resources.Res
@@ -118,6 +131,10 @@ import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.zIndex
@@ -168,6 +185,13 @@ enum class NavigationSize { Small, Medium, Large }
 enum class NavigationStyle { Spotify, Glaze }
 
 private enum class Tab { Home, Artists, Playlists, Search }
+internal enum class ArtistSort { Name, NameReverse, MostAlbums, FewestAlbums }
+internal fun sortArtists(artists: List<Artist>, order: ArtistSort): List<Artist> = when (order) {
+    ArtistSort.Name -> artists.sortedBy { it.name.lowercase() }
+    ArtistSort.NameReverse -> artists.sortedByDescending { it.name.lowercase() }
+    ArtistSort.MostAlbums -> artists.sortedWith(compareByDescending<Artist> { it.albumCount }.thenBy { it.name.lowercase() })
+    ArtistSort.FewestAlbums -> artists.sortedWith(compareBy<Artist> { it.albumCount }.thenBy { it.name.lowercase() })
+}
 internal enum class ArtistSection { TopSongs, Albums, Singles }
 private sealed interface Detail {
     data class ArtistPage(val artist: Artist) : Detail
@@ -434,6 +458,8 @@ private fun LibraryScreen(
     var artistDetails by remember { mutableStateOf<Artist?>(null) }
     var freshSongs by remember { mutableStateOf(emptyList<Song>()) }
     var artists by remember { mutableStateOf(emptyList<Artist>()) }
+    var artistColumns by remember { mutableStateOf(2) }
+    var artistSort by remember { mutableStateOf(ArtistSort.Name) }
     var playlists by remember { mutableStateOf(emptyList<Playlist>()) }
     var songs by remember { mutableStateOf(emptyList<Song>()) }
     var songsRevision by remember { mutableStateOf(0) }
@@ -649,7 +675,10 @@ private fun LibraryScreen(
                 Detail.SettingsPage -> SettingsScreen(settings, onSettingsChange, onDisconnect, chromeSpace)
                 null -> when (tab) {
                     Tab.Home -> Unit
-                    Tab.Artists -> ArtistList(artists, client, chromeSpace) { openDetail(Detail.ArtistPage(it)) }
+                    Tab.Artists -> ArtistList(artists, client, chromeSpace, artistColumns,
+                        { artistColumns = it }, artistSort, { artistSort = it }) {
+                        openDetail(Detail.ArtistPage(it))
+                    }
                     Tab.Playlists -> PlaylistList(playlists, client, chromeSpace) { openDetail(Detail.PlaylistPage(it)) }
                     Tab.Search -> SearchContent(query, { query = it }, results, client,
                         { openDetail(Detail.ArtistPage(it)) }, { openDetail(Detail.AlbumPage(it)) },
@@ -942,20 +971,163 @@ private fun AlbumRow(album: Album, client: SubsonicClient, onClick: () -> Unit) 
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ArtistList(artists: List<Artist>, client: SubsonicClient, bottomPadding: Dp,
-                       onArtist: (Artist) -> Unit) =
-    LazyColumn(contentPadding = PaddingValues(bottom = bottomPadding)) {
-        items(artists, key = { it.id }) { artist ->
-        Row(Modifier.fillMaxWidth().clickable { onArtist(artist) }.padding(horizontal = 22.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically) {
-            Artwork(client, artist.coverArt, Modifier.size(56.dp))
-            Spacer(Modifier.width(14.dp))
-            Text(artist.name, color = ink, fontSize = 17.sp, maxLines = 1,
-                softWrap = false, overflow = TextOverflow.Clip,
-                modifier = Modifier.weight(1f).basicMarquee(iterations = Int.MAX_VALUE))
+                       columns: Int, onColumns: (Int) -> Unit,
+                       sort: ArtistSort, onSort: (ArtistSort) -> Unit,
+                       onArtist: (Artist) -> Unit) {
+    var searchVisible by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    var sortMenu by remember { mutableStateOf(false) }
+    val gridState = rememberLazyGridState()
+    val visible = remember(artists, searchQuery, sort) {
+        sortArtists(artists.filter { it.name.contains(searchQuery.trim(), ignoreCase = true) }, sort)
+    }
+    val pullDistance = with(LocalDensity.current) { 48.dp.toPx() }
+    val hideDistance = with(LocalDensity.current) { 24.dp.toPx() }
+    val scrollConnection = remember(gridState, pullDistance, hideDistance) {
+        object : NestedScrollConnection {
+            var pull = 0f
+            var away = 0f
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                if (source == NestedScrollSource.UserInput && !gridState.canScrollBackward && available.y > 0f) {
+                    pull += available.y
+                    away = 0f
+                    if (pull >= pullDistance) { searchVisible = true; pull = 0f }
+                } else if (source == NestedScrollSource.UserInput && consumed.y < 0f) {
+                    away -= consumed.y
+                    pull = 0f
+                    if (away >= hideDistance) { searchVisible = false; searchQuery = ""; away = 0f }
+                } else if (source == NestedScrollSource.UserInput) {
+                    pull = 0f
+                    away = 0f
+                }
+                return Offset.Zero
+            }
         }
-    } }
+    }
+    LazyVerticalGrid(columns = GridCells.Fixed(columns), state = gridState,
+        modifier = Modifier.fillMaxSize().nestedScroll(scrollConnection),
+        contentPadding = PaddingValues(start = 22.dp, end = 22.dp, bottom = bottomPadding),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            Column(Modifier.padding(top = 18.dp, bottom = 20.dp)) {
+                if (searchVisible) {
+                    val searchShape = CircleShape
+                    BasicTextField(searchQuery, onValueChange = { searchQuery = it },
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = ink, fontSize = 16.sp),
+                        cursorBrush = SolidColor(ink),
+                        modifier = Modifier.fillMaxWidth().clip(searchShape)
+                            .background(ink.copy(alpha = 0.08f))
+                            .border(1.dp, ink.copy(alpha = 0.11f), searchShape)
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        decorationBox = { field ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(MaterialSymbols.RoundedFilled.Search, null, tint = muted,
+                                    modifier = Modifier.size(21.dp))
+                                Spacer(Modifier.width(12.dp))
+                                Box(Modifier.weight(1f)) {
+                                    if (searchQuery.isEmpty()) Text("Find an artist", color = muted)
+                                    field()
+                                }
+                            }
+                        })
+                    Spacer(Modifier.height(16.dp))
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.clip(CircleShape).background(glass)
+                        .border(1.dp, ink.copy(alpha = 0.12f), CircleShape).padding(4.dp)) {
+                        listOf(1 to "List", 2 to "2", 3 to "3").forEach { (count, label) ->
+                            Box(Modifier.width(if (count == 1) 52.dp else 40.dp).height(32.dp)
+                                .clip(CircleShape)
+                                .background(if (columns == count) ink.copy(alpha = 0.16f) else Color.Transparent)
+                                .clickable { onColumns(count) }, contentAlignment = Alignment.Center) {
+                                Text(label, color = if (columns == count) ink else muted, fontSize = 13.sp,
+                                    fontWeight = if (columns == count) FontWeight.SemiBold else FontWeight.Medium)
+                            }
+                        }
+                    }
+                    Row(Modifier.height(40.dp).clip(CircleShape).background(glass)
+                        .border(1.dp, ink.copy(alpha = 0.12f), CircleShape)
+                        .clickable { sortMenu = true }.padding(horizontal = 13.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Text("Sort · " + when (sort) {
+                            ArtistSort.Name -> "A–Z"; ArtistSort.NameReverse -> "Z–A"
+                            ArtistSort.MostAlbums -> "Most"; ArtistSort.FewestAlbums -> "Fewest"
+                        }, color = ink, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        Spacer(Modifier.width(3.dp))
+                        Icon(MaterialSymbols.RoundedFilled.Keyboard_arrow_down, null, tint = muted,
+                            modifier = Modifier.size(18.dp))
+                    }
+                }
+            }
+        }
+        items(visible.size, key = { visible[it].id }) { index ->
+            val artist = visible[index]
+            ArtistTile(artist, client, columns) { onArtist(artist) }
+        }
+    }
+    if (sortMenu) ModalBottomSheet(onDismissRequest = { sortMenu = false },
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = MaterialTheme.colorScheme.surface,
+        scrimColor = Color.Black.copy(alpha = 0.28f),
+        shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp),
+        contentWindowInsets = { WindowInsets(0, 0, 0, 0) }, dragHandle = null) {
+        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp))
+            .background(MaterialTheme.colorScheme.surface).navigationBarsPadding().padding(bottom = 22.dp)) {
+            SheetHandle()
+            Text("Sort artists", color = ink, fontSize = 21.sp, fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(start = 24.dp, top = 14.dp, bottom = 15.dp))
+            listOf(ArtistSort.Name to "Name A–Z", ArtistSort.NameReverse to "Name Z–A",
+                ArtistSort.MostAlbums to "Most albums", ArtistSort.FewestAlbums to "Fewest albums")
+                .forEach { (order, label) ->
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp)
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(if (sort == order) glass else Color.Transparent)
+                        .clickable { onSort(order); sortMenu = false }
+                        .padding(horizontal = 18.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Text(label, color = ink, fontSize = 16.sp, modifier = Modifier.weight(1f))
+                        if (sort == order) Icon(MaterialSymbols.RoundedFilled.Check, null, tint = ink)
+                    }
+                }
+        }
+    }
+}
+
+@Composable
+private fun ArtistTile(artist: Artist, client: SubsonicClient, columns: Int, onClick: () -> Unit) {
+    var portrait by remember(artist.id) { mutableStateOf(artist.imageUrl) }
+    LaunchedEffect(artist.id, client) {
+        if (portrait == null) portrait = runCatching { client.artistImageUrl(artist.id) }.getOrNull()
+    }
+    val picture: @Composable (Modifier) -> Unit = { modifier ->
+        Box(modifier.clip(CircleShape).background(glass), contentAlignment = Alignment.Center) {
+            if (portrait != null) AsyncImage(portrait, "${artist.name} portrait",
+                Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            else Text(artist.name.take(1), color = ink, style = MaterialTheme.typography.headlineMedium)
+        }
+    }
+    if (columns == 1) Row(Modifier.fillMaxWidth().clickable(onClick = onClick)
+        .padding(vertical = 7.dp, horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        picture(Modifier.size(60.dp))
+        Spacer(Modifier.width(14.dp))
+        Column {
+            Text(artist.name, color = ink, fontSize = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("${artist.albumCount} albums", color = muted, fontSize = 13.sp)
+        }
+    } else Column(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(bottom = 18.dp),
+        horizontalAlignment = Alignment.CenterHorizontally) {
+        picture(Modifier.fillMaxWidth().aspectRatio(1f))
+        Spacer(Modifier.height(8.dp))
+        Text(artist.name, color = ink, fontSize = if (columns == 2) 15.sp else 13.sp,
+            textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth(),
+            maxLines = 2, overflow = TextOverflow.Ellipsis)
+    }
+}
 
 @Composable
 private fun PlaylistList(playlists: List<Playlist>, client: SubsonicClient, bottomPadding: Dp,
