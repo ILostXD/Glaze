@@ -8,6 +8,7 @@
     <application
         android:name=".LiquidGlassApplication"
         android:allowBackup="false"
+        android:enableOnBackInvokedCallback="true"
         android:icon="@mipmap/ic_launcher"
         android:label="Glaze"
         android:theme="@android:style/Theme.Material.NoActionBar"

@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -30,18 +31,30 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,15 +69,18 @@ import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import com.skydoves.cloudy.cloudy
 import com.skydoves.cloudy.rememberSky
 import com.skydoves.cloudy.sky
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 @Composable
@@ -96,16 +112,44 @@ internal fun ArtistReferenceScreen(
     val fullAlbums = releases.filterNot(::isSingleOrEp)
     val singles = releases.filter(::isSingleOrEp)
     val featured = fullAlbums.firstOrNull() ?: releases.firstOrNull()
+    var searchVisible by remember(artist.id) { mutableStateOf(false) }
+    var searchQuery by remember(artist.id) { mutableStateOf("") }
+    val matchingSongs = topSongs.filter { searchQuery.isBlank() ||
+        it.title.contains(searchQuery, ignoreCase = true) ||
+        it.album.contains(searchQuery, ignoreCase = true) }
+    val matchingAlbums = fullAlbums.filter { searchQuery.isBlank() ||
+        it.name.contains(searchQuery, ignoreCase = true) }
+    val matchingSingles = singles.filter { searchQuery.isBlank() ||
+        it.name.contains(searchQuery, ignoreCase = true) }
     var selectedSong by remember { mutableStateOf<Song?>(null) }
-    var favorite by remember(artist.id) { mutableStateOf(artist.starred) }
+    var favorite by remember(client, artist.id) { mutableStateOf(artist.starred) }
+    var favoritePending by remember(client, artist.id) { mutableStateOf(false) }
+    var favoriteError by remember(client, artist.id) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
-    LaunchedEffect(artist.starred) { favorite = artist.starred }
+    val listState = rememberLazyListState()
+    val titleThreshold = with(LocalDensity.current) { 300.dp.roundToPx() }
+    val titlePast by remember(listState, titleThreshold, searchQuery, searchVisible) { derivedStateOf {
+        searchQuery.isNotBlank() ||
+        listState.firstVisibleItemIndex > 1 ||
+            (listState.firstVisibleItemIndex == 1 &&
+                listState.firstVisibleItemScrollOffset >= titleThreshold)
+    } }
+    val searchConnection = rememberPullSearchConnection({ listState.canScrollBackward },
+        { searchVisible = true }, { searchVisible = false; searchQuery = "" })
+    LaunchedEffect(client, artist.id, artist.starred) {
+        if (!favoritePending) favorite = artist.starred
+    }
 
     Box(Modifier.fillMaxSize().background(base)) {
         Box(Modifier.fillMaxSize().sky(sky)) {
             AmbientArtwork(portraitUrl, darkMode) { sky.invalidate() }
-            LazyColumn(contentPadding = PaddingValues(bottom = 220.dp)) {
-                item {
+            LazyColumn(state = listState, modifier = Modifier.nestedScroll(searchConnection),
+                contentPadding = PaddingValues(bottom = 220.dp)) {
+                item { if (searchVisible) Box(Modifier.statusBarsPadding().padding(top = 72.dp)) {
+                    LibrarySearchField(searchQuery, { searchQuery = it }, "Find on artist page",
+                        Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
+                } }
+                if (searchQuery.isBlank()) item {
                     Box(Modifier.fillMaxWidth().height(560.dp)) {
                         HeroArtwork(portraitUrl) { sky.invalidate() }
                         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(
@@ -113,7 +157,7 @@ internal fun ArtistReferenceScreen(
                             0.55f to Color.Transparent,
                             1f to Color.Transparent,
                         )))
-                        Column(Modifier.align(Alignment.BottomCenter).padding(bottom = 20.dp),
+                        Column(Modifier.align(Alignment.BottomCenter).padding(bottom = 40.dp),
                             horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(
                                 artist.name,
@@ -130,17 +174,25 @@ internal fun ArtistReferenceScreen(
                                 maxLines = 2,
                                 overflow = TextOverflow.Ellipsis,
                             )
-                            Spacer(Modifier.height(22.dp))
+                            Spacer(Modifier.height(18.dp))
                             Row(horizontalArrangement = Arrangement.Center) {
                                 RoundAction(if (favorite) MaterialSymbols.RoundedFilled.Favorite
                                     else MaterialSymbols.Rounded.FavoriteOutline,
                                     if (favorite) "Unfavorite ${artist.name}" else "Favorite ${artist.name}", darkMode,
-                                    tint = if (favorite) Color(0xFFFF4D71) else ink.copy(alpha = 0.60f)) {
+                                    tint = if (favorite) favoriteRed else ink.copy(alpha = 0.60f),
+                                    enabled = !favoritePending) {
+                                    if (favoritePending) return@RoundAction
                                     val next = !favorite
                                     favorite = next
+                                    favoritePending = true
+                                    favoriteError = null
                                     scope.launch {
                                         try { client.setArtistStarred(artist.id, next) }
-                                        catch (_: Exception) { favorite = !next }
+                                        catch (cancelled: CancellationException) { throw cancelled }
+                                        catch (_: Exception) {
+                                            favorite = !next
+                                            favoriteError = "Could not update favorite. Try again."
+                                        } finally { favoritePending = false }
                                     }
                                 }
                                 Spacer(Modifier.width(17.dp))
@@ -150,10 +202,15 @@ internal fun ArtistReferenceScreen(
                                 RoundAction(MaterialSymbols.RoundedFilled.Shuffle,
                                     "Shuffle ${artist.name}", darkMode, onClick = onShuffle)
                             }
+                            favoriteError?.let { message ->
+                                Text(message, modifier = Modifier.padding(top = 8.dp, start = 24.dp, end = 24.dp),
+                                    color = Color.White, style = MaterialTheme.typography.bodySmall,
+                                    textAlign = TextAlign.Center)
+                            }
                         }
                     }
                 }
-                if (featured != null) item {
+                if (featured != null && searchQuery.isBlank()) item {
                     Row(
                         Modifier.fillMaxWidth().padding(horizontal = 20.dp)
                             .clip(RoundedCornerShape(26.dp))
@@ -183,13 +240,13 @@ internal fun ArtistReferenceScreen(
                             modifier = Modifier.size(22.dp))
                     }
                 }
-                if (topSongs.isNotEmpty()) item {
+                if (matchingSongs.isNotEmpty()) item {
                     ArtistSectionHeading("Top Songs", Modifier.padding(top = 34.dp, bottom = 14.dp)) {
                         onSection(ArtistSection.TopSongs)
                     }
                     LazyRow(contentPadding = PaddingValues(horizontal = 24.dp),
                         horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        items(topSongs.chunked(4)) { page ->
+                        items(matchingSongs.chunked(4)) { page ->
                             Column(Modifier.width(330.dp)) {
                                 page.forEach { song ->
                                     ArtistSongRow(song, client, artist.name, onSong) {
@@ -200,17 +257,22 @@ internal fun ArtistReferenceScreen(
                         }
                     }
                 }
-                if (fullAlbums.isNotEmpty()) item {
+                if (matchingAlbums.isNotEmpty()) item {
                     ArtistSectionHeading("Albums", Modifier.padding(top = 36.dp, bottom = 15.dp),
                         onClick = if (fullAlbums.size > 10) ({ onSection(ArtistSection.Albums) }) else null)
-                    ArtistReleaseRow(fullAlbums, client, onAlbum)
+                    ArtistReleaseRow(matchingAlbums, client, onAlbum)
                 }
-                if (singles.isNotEmpty()) item {
+                if (matchingSingles.isNotEmpty()) item {
                     ArtistSectionHeading("Singles & EPs", Modifier.padding(top = 36.dp, bottom = 15.dp),
                         onClick = if (singles.size > 10) ({ onSection(ArtistSection.Singles) }) else null)
-                    ArtistReleaseRow(singles, client, onAlbum)
+                    ArtistReleaseRow(matchingSingles, client, onAlbum)
                 }
-                item { ArtistAbout(info, client, darkMode, onArtist) }
+                if (searchQuery.isNotBlank() && matchingSongs.isEmpty() &&
+                    matchingAlbums.isEmpty() && matchingSingles.isEmpty()) item {
+                    Text("No matching music", color = quiet,
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 22.dp))
+                }
+                if (searchQuery.isBlank()) item { ArtistAbout(info, client, darkMode, onArtist) }
             }
         }
         DetailTopBar(
@@ -218,6 +280,9 @@ internal fun ArtistReferenceScreen(
             onShare = { onShareArtist(artist.name) },
             modifier = Modifier.align(Alignment.TopCenter),
             sky = sky,
+            title = artist.name,
+            collapsed = titlePast,
+            onScrollTop = { scope.launch { listState.animateScrollToItem(0) } },
         )
         selectedSong?.let { song ->
             CollectionSongSheet(song, client, onDismiss = { selectedSong = null },
@@ -241,6 +306,7 @@ private fun ArtistSectionHeading(text: String, modifier: Modifier = Modifier, on
         .padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(text, color = MaterialTheme.colorScheme.onBackground,
             style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold))
+        if (onClick != null) Spacer(Modifier.width(10.dp))
         if (onClick != null) Icon(MaterialSymbols.RoundedFilled.Arrow_forward, contentDescription = "See all $text",
             tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(22.dp))
     }
@@ -286,7 +352,7 @@ private fun ArtistReleaseRow(albums: List<Album>, client: SubsonicClient, onAlbu
 private fun ArtistReleaseCard(album: Album, client: SubsonicClient, modifier: Modifier,
     onAlbum: (Album) -> Unit) {
     Column(modifier.clickable { onAlbum(album) }) {
-        DetailArtwork(client, album.coverArt, Modifier.fillMaxWidth().height(158.dp))
+        DetailArtwork(client, album.coverArt, Modifier.fillMaxWidth().aspectRatio(1f))
         Spacer(Modifier.height(8.dp))
         Text(album.name, color = MaterialTheme.colorScheme.onBackground,
             style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
@@ -313,8 +379,9 @@ private fun ArtistAbout(info: ArtistInfo, client: SubsonicClient, darkMode: Bool
                 style = MaterialTheme.typography.bodyMedium,
                 maxLines = if (expanded) Int.MAX_VALUE else 5,
                 overflow = TextOverflow.Ellipsis)
-            if (!expanded && plain.length > 240) Text("More", color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.clickable { expanded = true }.padding(horizontal = 24.dp))
+            if (expanded || plain.length > 240) Text(if (expanded) "Less" else "More",
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.clickable { expanded = !expanded }.padding(horizontal = 24.dp))
         } ?: Text("No artist biography available yet.",
             modifier = Modifier.padding(horizontal = 24.dp, vertical = 14.dp),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -359,10 +426,23 @@ private fun SimilarArtistCard(artist: Artist, client: SubsonicClient, darkMode: 
 
 @Composable
 internal fun ArtistSectionScreen(artist: Artist, section: ArtistSection, albums: List<Album>,
-    songs: List<Song>, client: SubsonicClient, darkMode: Boolean, onBack: () -> Unit,
+    songs: List<Song>, client: SubsonicClient, darkMode: Boolean, bottomPadding: Dp, onBack: () -> Unit,
+    songColumns: Int, onSongColumns: (Int) -> Unit,
+    albumColumns: Int, onAlbumColumns: (Int) -> Unit,
     onAlbum: (Album) -> Unit, onSong: (Song) -> Unit, onAddNext: (Song) -> Unit,
     onShareSong: (Song) -> Unit, onArtist: (Artist) -> Unit) {
     var selectedSong by remember { mutableStateOf<Song?>(null) }
+    val gridState = rememberLazyGridState()
+    val scope = rememberCoroutineScope()
+    var songSort by rememberSaveable { mutableStateOf(SongSort.Top) }
+    var searchVisible by rememberSaveable { mutableStateOf(false) }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    val visibleSongs = remember(songs, songSort, searchQuery) { sortSongs(songs.filter {
+        searchQuery.isBlank() || it.title.contains(searchQuery, ignoreCase = true) ||
+            it.album.contains(searchQuery, ignoreCase = true)
+    }, songSort) }
+    val searchConnection = rememberPullSearchConnection({ gridState.canScrollBackward },
+        { searchVisible = true }, { searchVisible = false; searchQuery = "" })
     val title = when (section) {
         ArtistSection.TopSongs -> "Top Songs"
         ArtistSection.Albums -> "Albums"
@@ -371,32 +451,59 @@ internal fun ArtistSectionScreen(artist: Artist, section: ArtistSection, albums:
     val releases = albums.filter { isSingleOrEp(it) == (section == ArtistSection.Singles) }
         .sortedByDescending { it.releaseOrder }
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).statusBarsPadding()) {
-        Row(Modifier.fillMaxWidth().height(68.dp).padding(horizontal = 12.dp),
-            verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) {
-                Icon(MaterialSymbols.RoundedFilled.Arrow_back, contentDescription = "Back",
-                    tint = MaterialTheme.colorScheme.onBackground)
-            }
-            Text(title, modifier = Modifier.padding(start = 12.dp),
-                color = MaterialTheme.colorScheme.onBackground,
-                style = MaterialTheme.typography.titleLarge)
+        Box(Modifier.padding(top = 8.dp)) {
+            StickyTopBar(title, onScrollTop = { scope.launch {
+                gridState.animateScrollToItem(0)
+            } }, onBack = onBack)
         }
-        if (section == ArtistSection.TopSongs) LazyColumn(
-            contentPadding = PaddingValues(start = 24.dp, end = 24.dp, bottom = 220.dp)) {
-            items(songs, key = { it.id }) { song ->
-                ArtistSongRow(song, client, artist.name, onSong) { selectedSong = song }
-            }
-        } else LazyColumn(contentPadding = PaddingValues(start = 24.dp, end = 24.dp, bottom = 220.dp),
-            verticalArrangement = Arrangement.spacedBy(18.dp)) {
-            items(releases.chunked(2)) { pair ->
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    pair.forEach { album ->
-                        ArtistReleaseCard(album, client, Modifier.weight(1f), onAlbum)
-                    }
-                    if (pair.size == 1) Spacer(Modifier.weight(1f))
+        Spacer(Modifier.height(8.dp))
+        if (section == ArtistSection.TopSongs) LazyVerticalGrid(columns = GridCells.Fixed(songColumns),
+            state = gridState, modifier = Modifier.fillMaxSize().nestedScroll(searchConnection),
+            contentPadding = PaddingValues(start = 22.dp, end = 22.dp, bottom = bottomPadding),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalArrangement = Arrangement.spacedBy(if (songColumns == 1) 0.dp else 16.dp)) {
+            item(key = "controls", span = { GridItemSpan(maxLineSpan) }) {
+                Column {
+                if (searchVisible) LibrarySearchField(searchQuery, { searchQuery = it }, "Find a song")
+                BrowserControls(songColumns, onSongColumns, songSort,
+                    when (songSort) { SongSort.Top -> "Top"; SongSort.Name -> "A–Z"
+                        SongSort.NameReverse -> "Z–A"; SongSort.MostPlayed -> "Played" },
+                    listOf(SongSort.Top to "Top songs order", SongSort.Name to "Title A–Z",
+                        SongSort.NameReverse to "Title Z–A", SongSort.MostPlayed to "Your most played"),
+                    { songSort = it }, "Sort songs")
                 }
             }
-        }
+            if (visibleSongs.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
+                Text("No matching songs", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            gridItems(visibleSongs, key = { it.id }) { song ->
+                if (songColumns == 1) ArtistSongRow(song, client, artist.name, onSong) { selectedSong = song }
+                else Column(Modifier.clickable { onSong(song) }) {
+                    Box {
+                        DetailArtwork(client, song.coverArt, Modifier.fillMaxWidth().aspectRatio(1f))
+                        IconButton(onClick = { selectedSong = song },
+                            modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.background.copy(alpha = 0.82f))) {
+                            Icon(MaterialSymbols.RoundedFilled.More_vert, "More options for ${song.title}",
+                                tint = MaterialTheme.colorScheme.onBackground)
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text(song.title, color = MaterialTheme.colorScheme.onBackground,
+                        style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (song.isExplicit) {
+                            ExplicitBadge(color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.width(5.dp))
+                        }
+                        Text(song.album.ifBlank { artist.name }, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+        } else HomeAlbumGrid(releases, client, bottomPadding, gridState, showYear = true,
+            columns = albumColumns, onColumns = onAlbumColumns, onAlbum = onAlbum)
     }
     selectedSong?.let { song ->
         CollectionSongSheet(song, client, onDismiss = { selectedSong = null },
@@ -474,12 +581,14 @@ private fun RoundAction(
     description: String,
     darkMode: Boolean,
     tint: Color? = null,
+    enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
     val shape = CircleShape
     IconButton(
         onClick = onClick,
-        modifier = Modifier.size(64.dp).clip(shape)
+        enabled = enabled,
+        modifier = Modifier.size(64.dp).graphicsLayer { alpha = if (enabled) 1f else 0.5f }.clip(shape)
             .background(if (darkMode) Color.White.copy(alpha = 0.12f)
                 else Color.Black.copy(alpha = 0.08f))
             .border(1.dp, if (darkMode) Color.White.copy(alpha = 0.22f)
@@ -504,15 +613,28 @@ private fun DetailTopBar(
     onShare: () -> Unit,
     modifier: Modifier,
     sky: com.skydoves.cloudy.Sky,
+    title: String,
+    collapsed: Boolean,
+    onScrollTop: () -> Unit,
 ) {
+    val collapse by animateFloatAsState(if (collapsed) 1f else 0f,
+        animationSpec = tween(240, easing = FastOutSlowInEasing), label = "Artist sticky bar")
     Row(
-        modifier.fillMaxWidth().statusBarsPadding()
-            .padding(start = 19.dp, end = 19.dp, top = 9.dp),
+        modifier.fillMaxWidth().background(Color.Black.copy(alpha = collapse)).statusBarsPadding()
+            .padding(start = 19.dp, end = 19.dp, top = 9.dp)
+            .clickable(onClickLabel = "Scroll to top", onClick = onScrollTop),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        DetailGlassIcon(MaterialSymbols.RoundedFilled.Arrow_back, "Back", darkMode, sky, onBack)
-        DetailGlassIcon(MaterialSymbols.RoundedFilled.Share, "Share artist", darkMode, sky, onShare)
+        DetailGlassIcon(MaterialSymbols.RoundedFilled.Arrow_back, "Back", darkMode, sky,
+            collapse, onBack)
+        Text(title, color = Color.White,
+            style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.weight(1f).padding(horizontal = 12.dp)
+                .graphicsLayer { alpha = collapse },
+            textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        DetailGlassIcon(MaterialSymbols.RoundedFilled.Share, "Share artist", darkMode, sky,
+            collapse, onShare)
     }
 }
 
@@ -522,16 +644,17 @@ private fun DetailGlassIcon(
     description: String,
     darkMode: Boolean,
     sky: com.skydoves.cloudy.Sky,
+    collapse: Float,
     onClick: () -> Unit,
 ) {
-    IconButton(
-        onClick = onClick,
-        modifier = Modifier.size(52.dp)
+    Box(Modifier.size(52.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxSize().graphicsLayer { alpha = 1f - collapse }
             .cloudy(sky = sky, radius = 42,
                 tint = if (darkMode) Color.Black.copy(alpha = 0.22f)
                 else Color.Black.copy(alpha = 0.42f), shape = CircleShape)
-            .border(1.dp, Color.White.copy(alpha = 0.27f), CircleShape),
-    ) {
-        Icon(image, contentDescription = description, tint = Color.White)
+            .border(1.dp, Color.White.copy(alpha = 0.27f), CircleShape))
+        IconButton(onClick = onClick, modifier = Modifier.fillMaxSize()) {
+            Icon(image, contentDescription = description, tint = Color.White)
+        }
     }
 }

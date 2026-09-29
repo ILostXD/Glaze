@@ -124,12 +124,12 @@ class MainActivity : ComponentActivity() {
     private fun sampleArtworkColors(account: ServerCredentials, artworkId: String): Pair<Color, Color> {
         val client = SubsonicClient(account)
         return try {
-            val connection = URL(client.coverArtUrl(artworkId, 96)).openConnection().apply {
+            val connection = URL(client.coverArtUrl(artworkId, 256)).openConnection().apply {
                 connectTimeout = 5_000
                 readTimeout = 5_000
             }
             val bitmap = connection.getInputStream().use { stream ->
-                BitmapFactory.decodeStream(stream, null, BitmapFactory.Options().apply { inSampleSize = 4 })
+                BitmapFactory.decodeStream(stream, null, BitmapFactory.Options().apply { inSampleSize = 2 })
             } ?: return Color.Black to Color.Black
             try {
                 val palette = Palette.from(bitmap).generate()
@@ -138,7 +138,8 @@ class MainActivity : ComponentActivity() {
                     ?: palette.lightMutedSwatch ?: palette.dominantSwatch
                 val accent = swatch?.let { Color(it.rgb) } ?: Color.Black
                 accent to artworkBackdropColor(
-                    palette.dominantSwatch?.let { Color(it.rgb) }, accent)
+                    palette.dominantSwatch?.let { Color(it.rgb) }, accent,
+                    palette.swatches.map { Color(it.rgb) to it.population })
             } finally {
                 bitmap.recycle()
             }
@@ -203,7 +204,8 @@ class MainActivity : ComponentActivity() {
                 repeatMode = repeatMode.intValue,
                 playbackSpeed = playbackSpeed.floatValue,
                 settings = appSettings.value,
-                onSettingsChange = { updated ->
+                onSettingsChange = { update ->
+                    val updated = update(appSettings.value)
                     appSettings.value = updated
                     settingsStore.save(updated)
                 },

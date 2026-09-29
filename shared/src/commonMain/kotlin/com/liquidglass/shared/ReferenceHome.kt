@@ -1,35 +1,46 @@
 package com.liquidglass.shared
 
 import com.composables.icons.materialsymbols.MaterialSymbols
+import com.composables.icons.materialsymbols.rounded.Favorite as FavoriteOutline
+import com.composables.icons.materialsymbols.roundedfilled.Favorite
+import com.composables.icons.materialsymbols.roundedfilled.Chevron_right
 import com.composables.icons.materialsymbols.roundedfilled.Home
 import com.composables.icons.materialsymbols.roundedfilled.Arrow_back
 import com.composables.icons.materialsymbols.roundedfilled.Library_music
-import com.composables.icons.materialsymbols.roundedfilled.More_horiz
 import com.composables.icons.materialsymbols.roundedfilled.Pause
 import com.composables.icons.materialsymbols.roundedfilled.Play_arrow
 import com.composables.icons.materialsymbols.roundedfilled.Playlist_play
 import com.composables.icons.materialsymbols.roundedfilled.Search
 import com.composables.icons.materialsymbols.roundedfilled.Skip_next
+import com.composables.icons.materialsymbols.roundedfilled.Tune
+import com.composables.icons.materialsymbols.roundedfilled.Drag_handle
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -38,160 +49,197 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconToggleButton
+import androidx.compose.material3.Switch
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.carousel.HorizontalUncontainedCarousel
+import androidx.compose.material3.carousel.rememberCarouselState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.zIndex
 import coil3.compose.AsyncImage
 import com.liquidglass.shared.resources.Res
 import com.liquidglass.shared.resources.glaze_wordmark
 import com.skydoves.cloudy.Sky
 import com.skydoves.cloudy.cloudy
 import org.jetbrains.compose.resources.painterResource
+import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 @Composable
 internal fun ReferenceHomeScreen(
     albums: List<Album>,
-    freshSongs: List<Song>,
+    recentAlbums: List<Album>,
+    playlists: List<Playlist>,
     client: SubsonicClient,
     darkMode: Boolean,
     loading: Boolean,
     error: String?,
-    shuffling: Boolean,
-    onShuffle: () -> Unit,
+    sections: List<HomeShelf>,
+    bottomPadding: Dp,
     onAlbum: (Album) -> Unit,
-    onPlaySong: (Song) -> Unit,
-    onAddNext: (Song) -> Unit,
-    onAddToQueue: (Song) -> Unit,
+    onPlaylist: (Playlist) -> Unit,
+    onSection: (HomeSection) -> Unit,
+    onPlaylists: () -> Unit,
+    isFavorite: (Playlist) -> Boolean,
+    onFavorite: (Playlist, Boolean) -> Unit,
     onSettings: () -> Unit,
+    onCustomize: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
     val ink = colors.onBackground
     val muted = colors.onSurfaceVariant
-    val surface = colors.background
-    Box(Modifier.fillMaxSize().background(surface)) {
+    val newAlbums = albums.take(12)
+    val newIds = newAlbums.mapTo(mutableSetOf()) { it.id }
+    val returningAlbums = recentAlbums.distinctBy { it.id }.filterNot { it.id in newIds }
+    // Keep lazy measurement independent of which preview cards are currently visible.
+    val mixHeight = 212.dp * LocalDensity.current.fontScale.coerceAtLeast(1f)
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    Box(Modifier.fillMaxSize().background(colors.background)) {
         LazyColumn(
             Modifier.fillMaxSize().statusBarsPadding(),
-            contentPadding = PaddingValues(top = 20.dp, bottom = 220.dp),
+            state = listState,
+            contentPadding = PaddingValues(top = 20.dp, bottom = bottomPadding),
         ) {
-            item {
-                AppToolbar(null, client.credentials.username, darkMode, onSettings)
-            }
-            if (error != null) item {
-                Text(error, color = ink, fontSize = 13.sp,
-                    modifier = Modifier.padding(start = 22.dp, end = 22.dp, top = 18.dp))
-            }
-            item {
-                Row(
-                    Modifier.fillMaxWidth().padding(start = 22.dp, end = 22.dp, top = 27.dp, bottom = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("NEW IN YOUR LIBRARY", color = muted, fontSize = 11.sp,
-                        fontWeight = FontWeight.W600, letterSpacing = 1.sp,
-                        modifier = Modifier.weight(1f))
-                    if (albums.size > 1) Text("Swipe to browse", color = muted, fontSize = 11.sp)
-                }
-            }
-            item {
-                BoxWithConstraints(Modifier.fillMaxWidth()) {
-                    val cardWidth = maxWidth - 72.dp
-                    LazyRow(
-                        contentPadding = PaddingValues(horizontal = 22.dp),
-                        horizontalArrangement = Arrangement.spacedBy(14.dp),
-                    ) {
-                        items(albums.take(12), key = { it.id }) { album ->
-                            Column(Modifier.width(cardWidth).clickable { onAlbum(album) }) {
-                                Text(album.name, color = ink, fontSize = 20.sp, lineHeight = 23.sp,
-                                    fontWeight = FontWeight.W600, maxLines = 1,
-                                    softWrap = false, overflow = TextOverflow.Clip,
-                                    modifier = Modifier.fillMaxWidth().basicMarquee(iterations = Int.MAX_VALUE))
-                                Text(album.artist, color = muted, fontSize = 17.sp,
-                                    fontWeight = FontWeight.W400, maxLines = 1,
-                                    softWrap = false, overflow = TextOverflow.Clip,
-                                    modifier = Modifier.fillMaxWidth().basicMarquee(iterations = Int.MAX_VALUE))
-                                Spacer(Modifier.height(10.dp))
-                                AlbumImage(client, album.coverArt,
-                                    Modifier.fillMaxWidth().height(245.dp).clip(RoundedCornerShape(17.dp)))
+            item("toolbar") { AppToolbar(null, client.credentials.username, darkMode, onSettings,
+                onScrollTop = { scope.launch { listState.animateScrollToItem(0) } }) }
+            if (error != null) item("error") { HomeNotice(error) }
+            sections.forEach { section -> when (section) {
+                HomeShelf.Mixes -> {
+                    item("mix-heading") {
+                        HomeSectionHeading(section.title, "Mix previews · personalization coming later")
+                    }
+                    item("mixes") {
+                        LazyRow(Modifier.height(mixHeight), contentPadding = PaddingValues(horizontal = 22.dp),
+                            horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                            items(homeMixPreviews, key = { it.title }) {
+                                MixPreviewCard(it, Modifier.width(176.dp).height(mixHeight))
                             }
                         }
                     }
                 }
-            }
-            item {
-                Row(
-                    Modifier.fillMaxWidth().padding(start = 22.dp, end = 22.dp, top = 31.dp, bottom = 9.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("Recently Added Songs", color = ink, fontSize = 22.sp,
-                        fontWeight = FontWeight.W600, modifier = Modifier.weight(1f))
-                    Text(
-                        if (shuffling) "Loading…" else "Shuffle", color = ink,
-                        fontSize = 13.sp, fontWeight = FontWeight.W500,
-                        modifier = Modifier.clickable(enabled = !shuffling, onClick = onShuffle)
-                            .padding(start = 8.dp, top = 8.dp, bottom = 8.dp),
-                    )
+                HomeShelf.NewLibrary -> {
+                    item("new-heading") {
+                        HomeSectionHeading(section.title, "Your latest additions") {
+                            onSection(HomeSection.NewLibrary)
+                        }
+                    }
+                    if (newAlbums.isEmpty()) item("new-empty") {
+                        HomeNotice(if (loading) "Loading your library…" else "New additions will appear here.")
+                    } else item("new-albums") {
+                        HomeAlbumCarousel(newAlbums, client, onAlbum)
+                    }
                 }
-            }
-            if (loading) item {
-                Text("Loading your library…", color = muted,
-                    modifier = Modifier.padding(horizontal = 22.dp, vertical = 18.dp))
-            } else if (freshSongs.isEmpty()) item {
-                Text("No songs here yet.", color = muted,
-                    modifier = Modifier.padding(horizontal = 22.dp, vertical = 18.dp))
-            } else items(freshSongs.take(8), key = { it.id }) { song ->
-                HomeSongRow(song, client,
-                    onClick = { onPlaySong(song) },
-                    onAddNext = { onAddNext(song) },
-                    onAddToQueue = { onAddToQueue(song) })
-            }
-            if (albums.size > 1) {
-                item {
-                    Text("Albums", color = ink, fontSize = 22.sp,
-                        fontWeight = FontWeight.W600,
-                        modifier = Modifier.padding(start = 22.dp, top = 31.dp, bottom = 12.dp))
-                }
-                item {
-                    LazyRow(contentPadding = PaddingValues(horizontal = 22.dp),
-                        horizontalArrangement = Arrangement.spacedBy(13.dp)) {
-                        items(albums.drop(1).take(12), key = { it.id }) { album ->
-                            Column(Modifier.width(144.dp).clickable { onAlbum(album) }) {
-                                AlbumImage(client, album.coverArt,
-                                    Modifier.size(144.dp).clip(RoundedCornerShape(12.dp)))
-                                Spacer(Modifier.height(6.dp))
-                                Text(album.name, color = ink, fontSize = 13.sp,
-                                    fontWeight = FontWeight.W500, maxLines = 1,
-                                    softWrap = false, overflow = TextOverflow.Clip,
-                                    modifier = Modifier.fillMaxWidth().basicMarquee(iterations = Int.MAX_VALUE))
-                                Text(album.artist, color = muted, fontSize = 11.sp,
-                                    maxLines = 1, softWrap = false, overflow = TextOverflow.Clip,
-                                    modifier = Modifier.fillMaxWidth().basicMarquee(iterations = Int.MAX_VALUE))
+                HomeShelf.Playlists -> {
+                    item("playlist-heading") {
+                        HomeSectionHeading(section.title,
+                            if (playlists.any(isFavorite)) "Your favorites, always first" else "Keep your favorites close",
+                            onSeeAll = onPlaylists)
+                    }
+                    if (playlists.isEmpty()) item("playlist-empty") {
+                        HomeNotice(if (loading) "Loading your playlists…" else "Playlists from your server will appear here.")
+                    } else item("playlists") {
+                        LazyRow(contentPadding = PaddingValues(horizontal = 22.dp),
+                            horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                            items(playlists.take(12), key = { it.id }) { playlist ->
+                                Column(Modifier.width(154.dp).clickable { onPlaylist(playlist) }) {
+                                    Box {
+                                        AlbumImage(client, playlist.coverArt,
+                                            Modifier.size(154.dp).clip(RoundedCornerShape(16.dp)))
+                                        FavoritePlaylistButton(playlist.name, isFavorite(playlist),
+                                            Modifier.align(Alignment.TopEnd).padding(6.dp)
+                                                .clip(CircleShape).background(colors.background.copy(alpha = 0.82f)),
+                                            onCheckedChange = { onFavorite(playlist, it) })
+                                    }
+                                    Spacer(Modifier.height(9.dp))
+                                    Text(playlist.name, color = ink, style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text("${playlist.songCount} songs", color = muted, style = MaterialTheme.typography.bodySmall)
+                                }
                             }
                         }
                     }
+                }
+                HomeShelf.Recent -> if (returningAlbums.isNotEmpty()) {
+                    item("recent-heading") {
+                        HomeSectionHeading(section.title, "From your listening history") {
+                            onSection(HomeSection.Recent)
+                        }
+                    }
+                    item("recent-albums") {
+                        LazyRow(contentPadding = PaddingValues(horizontal = 22.dp),
+                            horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                            items(returningAlbums.take(12), key = { it.id }) { album ->
+                                Column(Modifier.width(154.dp).clickable { onAlbum(album) }) {
+                                    AlbumImage(client, album.coverArt,
+                                        Modifier.size(154.dp).clip(RoundedCornerShape(16.dp)))
+                                    HomeAlbumCaption(album, modifier = Modifier.heightIn(
+                                        min = 68.dp * LocalDensity.current.fontScale.coerceAtLeast(1f)))
+                                }
+                            }
+                        }
+                    }
+                }
+            } }
+            item("customize") {
+                TextButton(onClick = onCustomize, modifier = Modifier.padding(start = 14.dp, top = 12.dp)) {
+                    Icon(MaterialSymbols.RoundedFilled.Tune, null, tint = ink, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Customize Home", color = ink, style = MaterialTheme.typography.labelLarge,
+                        textDecoration = TextDecoration.Underline)
+                    Spacer(Modifier.width(6.dp))
+                    Icon(MaterialSymbols.RoundedFilled.Chevron_right, null, tint = ink,
+                        modifier = Modifier.size(18.dp))
                 }
             }
         }
@@ -200,78 +248,333 @@ internal fun ReferenceHomeScreen(
 
 @Composable
 internal fun AppToolbar(title: String?, username: String, darkMode: Boolean,
-                        onSettings: (() -> Unit)?, onBack: (() -> Unit)? = null) {
+                        onSettings: (() -> Unit)?, onBack: (() -> Unit)? = null,
+                        onScrollTop: () -> Unit) {
     val ink = MaterialTheme.colorScheme.onBackground
-    Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp).height(44.dp),
-        verticalAlignment = Alignment.CenterVertically) {
-        if (onBack != null) IconButton(onClick = onBack) {
-            Icon(MaterialSymbols.RoundedFilled.Arrow_back, "Back", tint = ink)
-        }
-        if (title == null) Image(
-            painter = painterResource(Res.drawable.glaze_wordmark),
-            contentDescription = "Glaze",
-            modifier = Modifier.weight(1f).height(43.dp),
-            alignment = Alignment.CenterStart,
-            colorFilter = ColorFilter.tint(ink),
-        ) else Text(title, modifier = Modifier.weight(1f), color = ink,
-            fontSize = 29.sp, fontWeight = FontWeight.SemiBold,
-            maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Box(Modifier.size(44.dp).clip(CircleShape)
+    val avatar: @Composable () -> Unit = {
+        Box(Modifier.size(40.dp).clip(CircleShape)
             .background(if (darkMode) Color.White else Color.Black)
             .border(1.dp, ink.copy(alpha = 0.25f), CircleShape)
+            .semantics { contentDescription = "Open settings" }
             .then(if (onSettings != null) Modifier.clickable(onClick = onSettings) else Modifier),
             contentAlignment = Alignment.Center) {
             Text(username.take(2).uppercase(), color = if (darkMode) Color.Black else Color.White,
-                fontSize = 15.sp, fontWeight = FontWeight.W600)
+                style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+        }
+    }
+    if (title != null) {
+        StickyTopBar(title, onScrollTop, onBack, actionCount = if (onBack == null) 1 else 0) {
+            if (onBack == null) avatar()
+        }
+        return
+    }
+    Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp).heightIn(min = 56.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Image(
+            painter = painterResource(Res.drawable.glaze_wordmark),
+            contentDescription = "Glaze",
+            modifier = Modifier.weight(1f).height(43.dp).clickable(onClick = onScrollTop),
+            alignment = Alignment.CenterStart,
+            colorFilter = ColorFilter.tint(ink),
+        )
+        Spacer(Modifier.width(12.dp))
+        avatar()
+    }
+}
+
+private data class HomeMixPreview(val title: String, val subtitle: String, val colors: List<Color>)
+
+private val homeMixPreviews = listOf(
+    HomeMixPreview("Daily Mix", "Your taste, mixed together", listOf(Color(0xFF247F81), Color(0xFF103537))),
+    HomeMixPreview("On Repeat", "The songs you keep coming back to", listOf(Color(0xFF8254A5), Color(0xFF30213F))),
+    HomeMixPreview("After Hours", "A slower soundtrack for late nights", listOf(Color(0xFF435D9A), Color(0xFF1B2441))),
+    HomeMixPreview("Discovery Mix", "A fresh direction for your next listen", listOf(Color(0xFFA65362), Color(0xFF44242D))),
+)
+
+@Composable
+private fun MixPreviewCard(mix: HomeMixPreview, modifier: Modifier) {
+    val shape = RoundedCornerShape(22.dp)
+    Box(modifier.clip(shape)
+        .background(Brush.linearGradient(mix.colors))
+        .border(1.dp, Color.White.copy(alpha = 0.16f), shape)) {
+        Canvas(Modifier.fillMaxSize().blur(20.dp)) {
+            val center = Offset(size.width * 0.85f, size.height * 0.30f)
+            val radius = size.width * 0.54f
+            drawCircle(Brush.radialGradient(listOf(Color.White.copy(alpha = 0.18f), Color.Transparent),
+                center = center, radius = radius), radius, center)
+            repeat(6) { ring ->
+                drawCircle(Color.White.copy(alpha = 0.12f), radius * (0.55f + ring * 0.09f), center,
+                    style = Stroke(1.dp.toPx()))
+            }
+            drawCircle(Color.White.copy(alpha = 0.15f), radius * 0.08f, center)
+        }
+        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Image(painterResource(Res.drawable.glaze_wordmark), contentDescription = null,
+                modifier = Modifier.width(50.dp).height(18.dp), colorFilter = ColorFilter.tint(Color.White))
+            Spacer(Modifier.weight(1f))
+            Text("Preview", color = Color.White.copy(alpha = 0.9f), fontSize = 10.sp,
+                modifier = Modifier.clip(CircleShape).background(Color.White.copy(alpha = 0.12f))
+                    .padding(horizontal = 8.dp, vertical = 4.dp))
+        }
+        Column(Modifier.align(Alignment.BottomStart).padding(16.dp)) {
+            Text(mix.title, color = Color.White, style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.height(6.dp))
+            Text(mix.subtitle, color = Color.White.copy(alpha = 0.8f), style = MaterialTheme.typography.bodySmall,
+                maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
     }
 }
 
 @Composable
-private fun HomeSongRow(
-    song: Song, client: SubsonicClient,
-    onClick: () -> Unit, onAddNext: () -> Unit, onAddToQueue: () -> Unit,
-) {
+private fun HomeSectionHeading(title: String, subtitle: String, onSeeAll: (() -> Unit)? = null) {
     val colors = MaterialTheme.colorScheme
-    var menuOpen by remember { mutableStateOf(false) }
-    Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick)
-            .padding(horizontal = 22.dp, vertical = 5.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        AlbumImage(client, song.coverArt,
-            Modifier.size(50.dp).clip(RoundedCornerShape(7.dp)))
-        Spacer(Modifier.width(12.dp))
+    Row(Modifier.fillMaxWidth().padding(start = 22.dp, end = 16.dp, top = 24.dp, bottom = 14.dp),
+        verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
-            Text(song.title, color = colors.onBackground, fontSize = 15.sp,
-                fontWeight = FontWeight.W400, maxLines = 1, softWrap = false,
-                overflow = TextOverflow.Clip, modifier = Modifier.fillMaxWidth().basicMarquee(iterations = Int.MAX_VALUE))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (song.isExplicit) {
-                    ExplicitBadge(color = colors.onSurfaceVariant)
-                    Spacer(Modifier.width(5.dp))
-                }
-                Text(song.artist, color = colors.onSurfaceVariant, fontSize = 12.sp,
-                    maxLines = 1, softWrap = false, overflow = TextOverflow.Clip,
-                    modifier = Modifier.weight(1f).basicMarquee(iterations = Int.MAX_VALUE))
-            }
+            Text(title, color = colors.onBackground, style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(4.dp))
+            Text(subtitle, color = colors.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
         }
-        Box {
-            IconButton(onClick = { menuOpen = true }) {
-                Icon(MaterialSymbols.RoundedFilled.More_horiz, "Song actions",
-                    tint = colors.onSurfaceVariant)
-            }
-            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                DropdownMenuItem(text = { Text("Play next") }, onClick = {
-                    menuOpen = false; onAddNext()
-                })
-                DropdownMenuItem(text = { Text("Add to queue") }, onClick = {
-                    menuOpen = false; onAddToQueue()
-                })
+        if (onSeeAll != null) IconButton(onClick = onSeeAll) {
+            Icon(MaterialSymbols.RoundedFilled.Chevron_right, "See all $title", tint = colors.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun HomeNotice(message: String) {
+    val colors = MaterialTheme.colorScheme
+    Text(message, color = colors.onSurfaceVariant, fontSize = 14.sp,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 6.dp)
+            .clip(RoundedCornerShape(18.dp)).background(colors.onBackground.copy(alpha = 0.06f))
+            .padding(16.dp))
+}
+
+@Composable
+internal fun FavoritePlaylistButton(
+    name: String, favorite: Boolean, modifier: Modifier = Modifier, onCheckedChange: (Boolean) -> Unit,
+) {
+    IconToggleButton(checked = favorite, onCheckedChange = onCheckedChange, modifier = modifier) {
+        Icon(if (favorite) MaterialSymbols.RoundedFilled.Favorite else MaterialSymbols.Rounded.FavoriteOutline,
+            if (favorite) "Unfavorite $name" else "Favorite $name",
+            tint = if (favorite) favoriteRed else MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier.size(22.dp))
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun HomeAlbumCarousel(albums: List<Album>, client: SubsonicClient, onAlbum: (Album) -> Unit) {
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val coverSize = (maxWidth - 72.dp).coerceAtMost(360.dp)
+        HorizontalUncontainedCarousel(
+            state = rememberCarouselState { albums.size },
+            itemWidth = coverSize,
+            modifier = Modifier.fillMaxWidth().height(coverSize),
+            itemSpacing = 14.dp,
+            contentPadding = PaddingValues(horizontal = 22.dp),
+        ) { index ->
+            val album = albums[index]
+            Box(Modifier.fillMaxWidth().height(coverSize).maskClip(RoundedCornerShape(22.dp))
+                .clickable { onAlbum(album) }) {
+                AlbumImage(client, album.coverArt, Modifier.fillMaxSize())
+                Box(Modifier.fillMaxWidth().height(112.dp * LocalDensity.current.fontScale)
+                    .align(Alignment.BottomCenter).background(Brush.verticalGradient(
+                        listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f)))))
+                Column(Modifier.align(Alignment.BottomStart).padding(16.dp)) {
+                    Text(album.name, color = Color.White, style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(album.artist, color = Color.White.copy(alpha = 0.8f),
+                        style = MaterialTheme.typography.bodySmall, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis)
+                }
             }
         }
     }
 }
+
+@Composable
+private fun HomeAlbumCaption(album: Album, subtitle: String = album.artist, modifier: Modifier = Modifier) {
+    Column(modifier) {
+        Spacer(Modifier.height(9.dp))
+        Text(album.name, color = MaterialTheme.colorScheme.onBackground,
+            style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium,
+            maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+internal fun HomeAlbumGrid(albums: List<Album>, client: SubsonicClient, bottomPadding: Dp,
+    gridState: LazyGridState = rememberLazyGridState(), showYear: Boolean = false,
+    columns: Int, onColumns: (Int) -> Unit,
+    onAlbum: (Album) -> Unit) {
+    var sort by rememberSaveable { mutableStateOf(AlbumSort.Library) }
+    var searchVisible by rememberSaveable { mutableStateOf(false) }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    val visible = remember(albums, sort, searchQuery) { sortAlbums(albums.filter {
+        searchQuery.isBlank() || it.name.contains(searchQuery, ignoreCase = true) ||
+            it.artist.contains(searchQuery, ignoreCase = true)
+    }, sort) }
+    val searchConnection = rememberPullSearchConnection({ gridState.canScrollBackward },
+        { searchVisible = true }, { searchVisible = false; searchQuery = "" })
+    LazyVerticalGrid(columns = GridCells.Fixed(columns), state = gridState,
+        modifier = Modifier.fillMaxSize().nestedScroll(searchConnection),
+        contentPadding = PaddingValues(start = 22.dp, end = 22.dp, bottom = bottomPadding),
+        horizontalArrangement = Arrangement.spacedBy(14.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        item(key = "controls", span = { GridItemSpan(maxLineSpan) }) {
+            Column {
+            if (searchVisible) LibrarySearchField(searchQuery, { searchQuery = it }, "Find an album")
+            BrowserControls(columns, onColumns, sort,
+                when (sort) { AlbumSort.Library -> "Library"; AlbumSort.Name -> "A–Z"
+                    AlbumSort.NameReverse -> "Z–A"; AlbumSort.Newest -> "Newest"; AlbumSort.Oldest -> "Oldest" },
+                listOf(AlbumSort.Library to "Library order", AlbumSort.Name to "Name A–Z",
+                    AlbumSort.NameReverse to "Name Z–A", AlbumSort.Newest to "Newest releases",
+                    AlbumSort.Oldest to "Oldest releases"), { sort = it }, "Sort albums")
+            }
+        }
+        if (visible.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
+            HomeNotice(if (searchQuery.isBlank()) "No albums in this section yet." else "No matching albums")
+        }
+        gridItems(visible, key = { it.id }) { album ->
+            val subtitle = if (showYear) album.year?.toString().orEmpty() else album.artist
+            if (columns == 1) Row(Modifier.fillMaxWidth().clickable { onAlbum(album) },
+                verticalAlignment = Alignment.CenterVertically) {
+                AlbumImage(client, album.coverArt, Modifier.size(60.dp).clip(RoundedCornerShape(12.dp)))
+                Spacer(Modifier.width(14.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(album.name, color = MaterialTheme.colorScheme.onBackground,
+                        style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            } else Column(Modifier.clickable { onAlbum(album) }) {
+                AlbumImage(client, album.coverArt, Modifier.fillMaxWidth().aspectRatio(1f)
+                    .clip(RoundedCornerShape(16.dp)))
+                HomeAlbumCaption(album, subtitle)
+            }
+        }
+    }
+}
+
+@Composable
+internal fun HomeCustomizationScreen(settings: AppSettings, onChange: ((AppSettings) -> AppSettings) -> Unit,
+    bottomPadding: Dp, listState: LazyListState) {
+    val colors = MaterialTheme.colorScheme
+    val saved by rememberUpdatedState(settings.homeSections)
+    val hidden by rememberUpdatedState(settings.hiddenHomeSections)
+    val update by rememberUpdatedState(onChange)
+    var preview by remember { mutableStateOf<List<HomeShelf>?>(null) }
+    var dragShelf by remember { mutableStateOf<HomeShelf?>(null) }
+    var dragY by remember { mutableFloatStateOf(0f) }
+    val order = preview ?: saved
+    val rowHeight = 76.dp * LocalDensity.current.fontScale.coerceAtLeast(1f)
+    val rowHeightPx = with(LocalDensity.current) { rowHeight.toPx() }
+    LazyColumn(state = listState, contentPadding = PaddingValues(start = 22.dp, end = 22.dp,
+        top = 12.dp, bottom = bottomPadding), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        item("help") {
+            Text("Make Home yours", color = colors.onBackground,
+                style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            Text("Hold a handle to reorder. Use the switches to show or hide sections. Changes save automatically.",
+                color = colors.onSurfaceVariant, style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 6.dp, bottom = 14.dp))
+        }
+        items(order, key = { it.name }) { shelf ->
+            val shown = shelf !in hidden
+            val shape = RoundedCornerShape(20.dp)
+            Row(Modifier.animateItem(placementSpec = if (dragShelf == shelf) null else androidx.compose.animation.core.spring())
+                .zIndex(if (dragShelf == shelf) 1f else 0f)
+                .offset { IntOffset(0, if (dragShelf == shelf) dragY.roundToInt() else 0) }
+                .fillMaxWidth().height(rowHeight).clip(shape)
+                .background(colors.onBackground.copy(alpha = if (shown) 0.08f else 0.035f))
+                .border(1.dp, colors.onBackground.copy(alpha = 0.1f), shape)
+                .semantics {
+                    if (shown) customActions = listOf(
+                        CustomAccessibilityAction("Move ${shelf.title} up") {
+                            update { it.copy(homeSections = moveHomeSection(it.homeSections, shelf, -1)) }; true
+                        },
+                        CustomAccessibilityAction("Move ${shelf.title} down") {
+                            update { it.copy(homeSections = moveHomeSection(it.homeSections, shelf, 1)) }; true
+                        })
+                }.padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(shelf.title, color = colors.onBackground,
+                        style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(if (shown) "Position ${order.indexOf(shelf) + 1}" else "Hidden",
+                        color = colors.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                }
+                Switch(checked = shown, enabled = dragShelf == null,
+                    modifier = Modifier.semantics { contentDescription = "Show ${shelf.title} on Home" },
+                    onCheckedChange = { show -> update { it.copy(hiddenHomeSections =
+                        if (show) it.hiddenHomeSections - shelf else it.hiddenHomeSections + shelf) } })
+                Box(Modifier.size(48.dp).semantics { contentDescription = "Reorder ${shelf.title}" }
+                    .then(if (shown) Modifier.pointerInput(shelf, rowHeightPx) {
+                        var before = emptyList<HomeShelf>()
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = { before = saved; preview = before; dragShelf = shelf; dragY = 0f },
+                            onDrag = { change, amount ->
+                                val currentPreview = preview
+                                if (currentPreview != null && dragShelf == shelf) {
+                                    var order: List<HomeShelf> = currentPreview
+                                    dragY += amount.y
+                                    val distance = rowHeightPx + 8.dp.toPx()
+                                    var index = order.indexOf(shelf)
+                                    while (dragY > distance / 2 && index < order.lastIndex) {
+                                        order = moveHomeSection(order, shelf, 1)
+                                        dragY -= distance
+                                        index++
+                                    }
+                                    while (dragY < -distance / 2 && index > 0) {
+                                        order = moveHomeSection(order, shelf, -1)
+                                        dragY += distance
+                                        index--
+                                    }
+                                    preview = order
+                                    change.consume()
+                                }
+                            },
+                            onDragEnd = {
+                                val result = preview
+                                if (result != null) update {
+                                    if (it.homeSections == before) it.copy(homeSections = result) else it
+                                }
+                                dragShelf = null; preview = null; dragY = 0f
+                            },
+                            onDragCancel = { dragShelf = null; preview = null; dragY = 0f },
+                        )
+                    } else Modifier), contentAlignment = Alignment.Center) {
+                    Icon(MaterialSymbols.RoundedFilled.Drag_handle, null,
+                        tint = colors.onSurfaceVariant.copy(alpha = if (shown) 1f else 0.25f))
+                }
+            }
+        }
+        item("reset") {
+            TextButton(enabled = dragShelf == null,
+                onClick = { update { it.copy(homeSections = HomeShelf.entries,
+                    hiddenHomeSections = emptySet()) } }) {
+                Text("Reset Home layout", color = colors.onBackground,
+                    textDecoration = TextDecoration.Underline)
+            }
+        }
+    }
+}
+
+internal fun miniPlayerHeight(size: MiniPlayerSize): Dp = when (size) {
+    MiniPlayerSize.Small -> 52.dp; MiniPlayerSize.Medium -> 62.dp; MiniPlayerSize.Large -> 78.dp
+}
+
+internal fun navigationHeight(settings: AppSettings): Dp = when (settings.navigationSize) {
+    NavigationSize.Small -> 55.dp; NavigationSize.Medium -> 65.dp; NavigationSize.Large -> 75.dp
+} + if (settings.navigationLabels) 10.dp else 0.dp
+
+@Composable
+internal fun chromeContentPadding(settings: AppSettings, hasPlayer: Boolean): Dp =
+    WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 2.dp +
+        navigationHeight(settings) + (if (hasPlayer) miniPlayerHeight(settings.miniPlayerSize) + 14.dp else 0.dp) + 8.dp
 
 @Composable
 internal fun BoxScope.ReferenceChrome(
@@ -290,8 +593,9 @@ internal fun BoxScope.ReferenceChrome(
     onToggle: () -> Unit,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
-    onAddNext: (Song) -> Unit,
-    onAddToQueue: (Song) -> Unit,
+    onAlbum: (Album) -> Unit,
+    onArtist: (Artist) -> Unit,
+    onShareSong: (Song) -> Unit,
 ) {
     val pill = RoundedCornerShape(50)
     val ink = MaterialTheme.colorScheme.onBackground
@@ -303,24 +607,16 @@ internal fun BoxScope.ReferenceChrome(
         Color.White.copy(alpha = if (darkMode) 0.48f else 0.98f),
         Color.White.copy(alpha = if (darkMode) 0.06f else 0.30f),
     ))
-    var menuOpen by remember { mutableStateOf(false) }
+    var quickSheetOpen by remember { mutableStateOf(false) }
     var swipeX by remember(song?.id) { mutableFloatStateOf(0f) }
     val swipeThreshold = with(LocalDensity.current) { settings.gestures.sensitivityDp.dp.toPx() }
-    val miniHeight = when (settings.miniPlayerSize) {
-        MiniPlayerSize.Small -> 52.dp
-        MiniPlayerSize.Medium -> 62.dp
-        MiniPlayerSize.Large -> 78.dp
-    }
+    val miniHeight = miniPlayerHeight(settings.miniPlayerSize)
     val coverSize = when (settings.miniPlayerSize) {
         MiniPlayerSize.Small -> 34.dp
         MiniPlayerSize.Medium -> 43.dp
         MiniPlayerSize.Large -> 54.dp
     }
-    val navHeight = when (settings.navigationSize) {
-        NavigationSize.Small -> if (settings.navigationLabels) 65.dp else 55.dp
-        NavigationSize.Medium -> if (settings.navigationLabels) 75.dp else 65.dp
-        NavigationSize.Large -> if (settings.navigationLabels) 85.dp else 75.dp
-    }
+    val navHeight = navigationHeight(settings)
     val navIconSize = when (settings.navigationSize) {
         NavigationSize.Small -> 23.dp
         NavigationSize.Medium -> 27.dp
@@ -366,7 +662,7 @@ internal fun BoxScope.ReferenceChrome(
                     } else Modifier)
                     .combinedClickable(onClick = onExpandPlayer,
                         onLongClick = if (settings.gestures.miniPlayerLongPress)
-                            ({ menuOpen = true }) else null)
+                            ({ quickSheetOpen = true }) else null)
                     .padding(start = if (settings.miniPlayerSize == MiniPlayerSize.Large) 16.dp else 14.dp,
                         end = if (settings.miniPlayerSize == MiniPlayerSize.Large) 12.dp else 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -402,14 +698,9 @@ internal fun BoxScope.ReferenceChrome(
                         modifier = Modifier.size(if (settings.miniPlayerSize == MiniPlayerSize.Large) 31.dp else 27.dp))
                 }
             }
-            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                DropdownMenuItem(text = { Text("Play next") }, onClick = {
-                    menuOpen = false; onAddNext(song)
-                })
-                DropdownMenuItem(text = { Text("Add to queue") }, onClick = {
-                    menuOpen = false; onAddToQueue(song)
-                })
-            }
+            if (quickSheetOpen) CollectionSongSheet(song, client,
+                onDismiss = { quickSheetOpen = false }, onPlayNext = null,
+                onAlbum = onAlbum, onArtist = onArtist, onShare = onShareSong)
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
             Row(

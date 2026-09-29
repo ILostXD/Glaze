@@ -2,6 +2,7 @@ package com.liquidglass.shared
 
 import com.composables.icons.materialsymbols.MaterialSymbols
 import com.composables.icons.materialsymbols.roundedfilled.Arrow_back
+import com.composables.icons.materialsymbols.roundedfilled.Arrow_forward
 import com.composables.icons.materialsymbols.roundedfilled.Home
 import com.composables.icons.materialsymbols.roundedfilled.Library_music
 import com.composables.icons.materialsymbols.roundedfilled.More_vert
@@ -12,7 +13,9 @@ import com.composables.icons.materialsymbols.roundedfilled.Queue_music
 import com.composables.icons.materialsymbols.roundedfilled.Search
 import com.composables.icons.materialsymbols.roundedfilled.Check
 import com.composables.icons.materialsymbols.roundedfilled.Keyboard_arrow_down
+import com.composables.icons.materialsymbols.roundedfilled.Keyboard_arrow_up
 import com.composables.icons.materialsymbols.roundedfilled.Settings
+import com.composables.icons.materialsymbols.roundedfilled.Logout
 import com.composables.icons.materialsymbols.roundedfilled.Skip_next
 import com.composables.icons.materialsymbols.roundedfilled.Skip_previous
 
@@ -24,7 +27,6 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -33,6 +35,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -42,6 +45,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -49,6 +53,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.selection.selectable
@@ -56,9 +61,12 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
@@ -94,21 +102,30 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.key
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
-import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
@@ -131,10 +148,7 @@ import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.zIndex
@@ -142,6 +156,8 @@ import coil3.compose.AsyncImage
 import com.skydoves.cloudy.cloudy
 import com.skydoves.cloudy.rememberSky
 import com.skydoves.cloudy.sky
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -159,6 +175,7 @@ private val homeInk = Color(0xFF101114)
 private fun TextStyle.withFont(font: FontFamily): TextStyle = copy(fontFamily = font)
 private val homeMuted = Color(0xFF777B83)
 private val homeBlue = Color(0xFF287CE7)
+internal val favoriteRed = Color(0xFFFF4D71)
 
 data class GestureConfig(
     val miniPlayerSwipe: Boolean = true,
@@ -174,15 +191,49 @@ data class AppSettings(
     val themePreference: ThemePreference = ThemePreference.System,
     val miniPlayerSize: MiniPlayerSize = MiniPlayerSize.Medium,
     val navigationSize: NavigationSize = NavigationSize.Medium,
-    val navigationStyle: NavigationStyle = NavigationStyle.Spotify,
+    val navigationStyle: NavigationStyle = NavigationStyle.Glaze,
     val searchInNavigation: Boolean = true,
     val navigationLabels: Boolean = true,
+    val favoritePlaylistKeys: Set<String> = emptySet(),
+    val homeSections: List<HomeShelf> = HomeShelf.entries,
+    val hiddenHomeSections: Set<HomeShelf> = emptySet(),
+    val artistViewColumns: Int = 2,
+    val playlistViewColumns: Int = 1,
+    val albumViewColumns: Int = 2,
+    val songViewColumns: Int = 1,
 )
 
 enum class ThemePreference { System, Light, Dark }
 enum class MiniPlayerSize { Small, Medium, Large }
 enum class NavigationSize { Small, Medium, Large }
-enum class NavigationStyle { Spotify, Glaze }
+enum class NavigationStyle { Glaze, Spotify }
+enum class HomeShelf(val title: String) {
+    Mixes("Made for you"), NewLibrary("New in your library"),
+    Playlists("Your playlists"), Recent("Jump back in")
+}
+
+fun parseHomeSections(saved: String?): List<HomeShelf> {
+    if (saved == null) return HomeShelf.entries
+    val sections = saved.split(',').mapNotNull { name -> HomeShelf.entries.firstOrNull { it.name == name } }.distinct()
+    return if (saved.isNotEmpty() && sections.isEmpty()) HomeShelf.entries else sections
+}
+
+fun restoreHomeLayout(savedOrder: String?, savedHidden: String?): Pair<List<HomeShelf>, Set<HomeShelf>> {
+    val saved = parseHomeSections(savedOrder)
+    val order = saved + HomeShelf.entries.filterNot { it in saved }
+    val hidden = if (savedHidden == null) HomeShelf.entries.filterNot { it in saved }.toSet()
+        else savedHidden.split(',').mapNotNull { name ->
+            HomeShelf.entries.firstOrNull { it.name == name }
+        }.toSet()
+    return order to hidden
+}
+
+internal fun moveHomeSection(sections: List<HomeShelf>, section: HomeShelf, offset: Int): List<HomeShelf> {
+    val index = sections.indexOf(section)
+    val target = index + offset
+    if (index < 0 || target !in sections.indices) return sections
+    return sections.toMutableList().apply { add(target, removeAt(index)) }
+}
 
 private enum class Tab { Home, Artists, Playlists, Search }
 internal enum class ArtistSort { Name, NameReverse, MostAlbums, FewestAlbums }
@@ -193,14 +244,26 @@ internal fun sortArtists(artists: List<Artist>, order: ArtistSort): List<Artist>
     ArtistSort.FewestAlbums -> artists.sortedWith(compareBy<Artist> { it.albumCount }.thenBy { it.name.lowercase() })
 }
 internal enum class ArtistSection { TopSongs, Albums, Singles }
+internal enum class HomeSection(val title: String) {
+    NewLibrary("New in your library"), Recent("Jump back in")
+}
 private sealed interface Detail {
+    data class HomeSectionPage(val section: HomeSection) : Detail
+    data class GenrePage(val genre: Genre) : Detail
     data class ArtistPage(val artist: Artist) : Detail
     data class ArtistSectionPage(val artist: Artist, val section: ArtistSection) : Detail
     data class AlbumPage(val album: Album) : Detail
     data class PlaylistPage(val playlist: Playlist) : Detail
     data object QueuePage : Detail
     data object SettingsPage : Detail
+    data object HomeSettingsPage : Detail
 }
+
+private data class LoadedPage(
+    val songs: List<Song>, val sectionAlbums: List<Album>,
+    val artistAlbums: List<Album>, val artistSongs: List<Song>,
+    val artistInfo: ArtistInfo, val artistDetails: Artist?,
+)
 
 @Composable
 fun MusicApp(
@@ -232,7 +295,7 @@ fun MusicApp(
     onPlayQueueIndex: (Int) -> Unit,
     onShuffleSongs: (List<Song>) -> Unit,
     settings: AppSettings,
-    onSettingsChange: (AppSettings) -> Unit,
+    onSettingsChange: ((AppSettings) -> AppSettings) -> Unit,
     onReadPosition: () -> Pair<Long, Long>,
     onLightSystemBars: (Boolean) -> Unit,
     isShuffleEnabled: Boolean,
@@ -423,7 +486,7 @@ private fun LibraryScreen(
     onShuffleSongs: (List<Song>) -> Unit,
     onDisconnect: () -> Unit,
     settings: AppSettings,
-    onSettingsChange: (AppSettings) -> Unit,
+    onSettingsChange: ((AppSettings) -> AppSettings) -> Unit,
     onReadPosition: () -> Pair<Long, Long>,
     darkMode: Boolean,
     onLightSystemBars: (Boolean) -> Unit,
@@ -438,27 +501,67 @@ private fun LibraryScreen(
     var tab by remember { mutableStateOf(Tab.Home) }
     var detail by remember { mutableStateOf<Detail?>(null) }
     val detailBackStack = remember { mutableStateListOf<Detail>() }
+    val backPreviews = remember { mutableStateListOf<ImageBitmap?>() }
+    var homePreview by remember { mutableStateOf<ImageBitmap?>(null) }
+    val captureLayer = rememberGraphicsLayer()
+    val navigationScope = rememberCoroutineScope()
+    var navigationPending by remember { mutableStateOf(false) }
+    suspend fun capturePage(): ImageBitmap? = try {
+        captureLayer.toImageBitmap()
+    } catch (cancelled: CancellationException) { throw cancelled }
+    catch (_: Exception) { null }
     fun openDetail(next: Detail) {
-        detail?.let(detailBackStack::add)
-        detail = next
+        if (navigationPending) return
+        navigationPending = true
+        navigationScope.launch {
+            try {
+                val preview = capturePage()
+                detail?.let(detailBackStack::add)
+                backPreviews.add(preview)
+                detail = next
+            } finally { navigationPending = false }
+        }
     }
     fun goBack() {
+        if (backPreviews.isNotEmpty()) backPreviews.removeAt(backPreviews.lastIndex)
         if (detailBackStack.isNotEmpty()) detail = detailBackStack.removeAt(detailBackStack.lastIndex)
         else detail = null
     }
     fun selectTab(next: Tab) {
-        tab = next
-        detail = null
-        detailBackStack.clear()
+        if (navigationPending) return
+        if (detail == null && tab == Tab.Home && next != Tab.Home) {
+            navigationPending = true
+            navigationScope.launch {
+                try { homePreview = capturePage() }
+                finally {
+                    tab = next
+                    detail = null
+                    detailBackStack.clear()
+                    backPreviews.clear()
+                    navigationPending = false
+                }
+            }
+        } else {
+            if (tab == Tab.Home && detail != null && next != Tab.Home)
+                homePreview = backPreviews.firstOrNull()
+            tab = next
+            detail = null
+            detailBackStack.clear()
+            backPreviews.clear()
+        }
     }
     var albums by remember { mutableStateOf(emptyList<Album>()) }
     var artistAlbums by remember { mutableStateOf(emptyList<Album>()) }
     var artistSongs by remember { mutableStateOf(emptyList<Song>()) }
     var artistInfo by remember { mutableStateOf(ArtistInfo()) }
     var artistDetails by remember { mutableStateOf<Artist?>(null) }
-    var freshSongs by remember { mutableStateOf(emptyList<Song>()) }
+    var recentAlbums by remember(client) { mutableStateOf(emptyList<Album>()) }
+    var searchRecentAlbums by remember(client) { mutableStateOf(emptyList<Album>()) }
+    var searchFrequentAlbums by remember(client) { mutableStateOf(emptyList<Album>()) }
+    var genres by remember(client) { mutableStateOf(emptyList<Genre>()) }
+    var sectionAlbums by remember { mutableStateOf(emptyList<Album>()) }
+    var sectionLoading by remember { mutableStateOf(false) }
     var artists by remember { mutableStateOf(emptyList<Artist>()) }
-    var artistColumns by remember { mutableStateOf(2) }
     var artistSort by remember { mutableStateOf(ArtistSort.Name) }
     var playlists by remember { mutableStateOf(emptyList<Playlist>()) }
     var songs by remember { mutableStateOf(emptyList<Song>()) }
@@ -468,10 +571,37 @@ private fun LibraryScreen(
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var playerExpanded by remember { mutableStateOf(false) }
-    var shufflingLibrary by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
+    var loadedDetail by remember { mutableStateOf<Detail?>(null) }
+    val loadedPages = remember(client, songsRevision) { mutableMapOf<Detail, LoadedPage>() }
+    val homeStateHolder = rememberSaveableStateHolder()
+    val toolbarScope = rememberCoroutineScope()
+    val artistGridState = rememberLazyGridState()
+    val playlistGridState = rememberLazyGridState()
+    val newLibraryGridState = rememberLazyGridState()
+    val recentGridState = rememberLazyGridState()
+    val sectionGridState = if ((detail as? Detail.HomeSectionPage)?.section == HomeSection.Recent)
+        recentGridState else newLibraryGridState
+    val searchListState = rememberLazyListState()
+    val genreListState = rememberLazyListState()
+    LaunchedEffect(detail) { if (detail is Detail.GenrePage) genreListState.scrollToItem(0) }
+    val queueListState = rememberLazyListState()
+    val settingsScrollState = rememberScrollState()
+    val homeSettingsListState = rememberLazyListState()
+    fun isFavorite(playlist: Playlist) =
+        playlistFavoriteKey(client.credentials, playlist.id) in settings.favoritePlaylistKeys
+    fun setFavorite(playlist: Playlist, favorite: Boolean) {
+        val key = playlistFavoriteKey(client.credentials, playlist.id)
+        onSettingsChange { current -> current.copy(
+            favoritePlaylistKeys = current.favoritePlaylistKeys.withPlaylistFavorite(key, favorite)) }
+    }
+    val orderedPlaylists = remember(playlists, client, settings.favoritePlaylistKeys) {
+        favoriteFirstPlaylists(playlists, client.credentials, settings.favoritePlaylistKeys)
+    }
 
-    PlatformBackHandler(enabled = playerExpanded || detail != null || tab != Tab.Home) {
+    val previousPreview = if (detail != null) backPreviews.lastOrNull()
+        else if (tab != Tab.Home) homePreview else null
+    PlatformBackHandler(enabled = playerExpanded ||
+        (detail != null || tab != Tab.Home) && previousPreview == null) {
         when {
             playerExpanded -> playerExpanded = false
             detail != null -> goBack()
@@ -483,12 +613,11 @@ private fun LibraryScreen(
         loading = true
         try {
             albums = client.newestAlbums()
-            freshSongs = albums.take(3).flatMap { album ->
-                runCatching { client.albumSongs(album.id) }.getOrDefault(emptyList())
-            }.distinctBy { it.id }.take(12)
             artists = client.artists()
             playlists = client.playlists()
             error = null
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (t: Throwable) {
             error = t.message ?: "Could not load your library"
         } finally {
@@ -496,30 +625,59 @@ private fun LibraryScreen(
         }
     }
     LaunchedEffect(client, detail, songsRevision) {
-        songs = emptyList()
-        artistAlbums = emptyList()
-        artistSongs = emptyList()
-        artistInfo = ArtistInfo()
-        artistDetails = null
+        val requestedDetail = detail
+        val cached = requestedDetail?.let(loadedPages::get)
+        if (cached != null) {
+            songs = cached.songs
+            sectionAlbums = cached.sectionAlbums
+            artistAlbums = cached.artistAlbums
+            artistSongs = cached.artistSongs
+            artistInfo = cached.artistInfo
+            artistDetails = cached.artistDetails
+            sectionLoading = false
+            loadedDetail = requestedDetail
+        } else {
+            loadedDetail = null
+            songs = emptyList()
+            sectionAlbums = emptyList()
+            sectionLoading = false
+            artistAlbums = emptyList()
+            artistSongs = emptyList()
+            artistInfo = ArtistInfo()
+            artistDetails = null
+        }
+        var loaded = false
         try {
-            when (val page = detail) {
+            when (val page = requestedDetail) {
+                is Detail.HomeSectionPage -> {
+                    sectionLoading = cached == null
+                    try {
+                        sectionAlbums = when (page.section) {
+                            HomeSection.NewLibrary -> client.newestAlbums(size = 100)
+                            HomeSection.Recent -> client.recentlyPlayedAlbums(size = 100)
+                        }
+                        error = null
+                    } finally { sectionLoading = false }
+                }
                 is Detail.ArtistPage -> {
-                    artistAlbums = runCatching { client.artistAlbums(page.artist.id) }
-                        .getOrDefault(emptyList()).sortedByDescending { it.releaseOrder }
+                    val own = runCatching { client.artistAlbums(page.artist.id) }
+                        .getOrDefault(emptyList())
+                    artistAlbums = (own + cached?.artistAlbums.orEmpty()).distinctBy { it.id }
+                        .sortedByDescending { it.releaseOrder }
                     artistDetails = runCatching { client.artistDetails(page.artist.id) }.getOrNull()
                     artistInfo = runCatching { client.artistInfo(page.artist.id) }.getOrDefault(ArtistInfo())
-                    artistSongs = runCatching { client.artistTopSongs(page.artist.name) }
-                        .getOrDefault(emptyList()).ifEmpty {
+                    artistSongs = client.artistSongsWithFeatures(page.artist).ifEmpty {
                             artistAlbums.take(12).flatMap { album ->
                                 runCatching { client.albumSongs(album.id) }.getOrDefault(emptyList())
                             }.distinctBy { it.id }.sortedByDescending { it.playCount }
                         }
                 }
                 is Detail.ArtistSectionPage -> {
-                    artistAlbums = runCatching { client.artistAlbums(page.artist.id) }
-                        .getOrDefault(emptyList()).sortedByDescending { it.releaseOrder }
-                    artistSongs = runCatching { client.artistTopSongs(page.artist.name) }
-                        .getOrDefault(emptyList()).ifEmpty {
+                    val own = runCatching { client.artistAlbums(page.artist.id) }
+                        .getOrDefault(emptyList())
+                    artistAlbums = (own + cached?.artistAlbums.orEmpty()).distinctBy { it.id }
+                        .sortedByDescending { it.releaseOrder }
+                    artistSongs = client.artistSongsWithFeatures(page.artist).ifEmpty {
                             artistAlbums.take(12).flatMap { album ->
                                 runCatching { client.albumSongs(album.id) }.getOrDefault(emptyList())
                             }.distinctBy { it.id }.sortedByDescending { it.playCount }
@@ -527,49 +685,88 @@ private fun LibraryScreen(
                 }
                 is Detail.AlbumPage -> songs = client.albumSongs(page.album.id)
                 is Detail.PlaylistPage -> songs = client.playlistSongs(page.playlist.id)
+                is Detail.GenrePage -> {
+                    // ponytail: The API caps each request at 500 songs; page when a genre exceeds that.
+                    songs = client.genreSongs(page.genre.name, count = 500)
+                }
                 else -> Unit
             }
-        } catch (t: Throwable) { error = t.message ?: "Could not load songs" }
+            loaded = true
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (t: Throwable) { error = t.message ?: "Could not load songs" }
+        finally {
+            if (loaded) requestedDetail?.let { loadedPages[it] = LoadedPage(
+                songs, sectionAlbums, artistAlbums, artistSongs, artistInfo, artistDetails) }
+            if (detail == requestedDetail) loadedDetail = requestedDetail
+        }
+    }
+    LaunchedEffect(client, detail, loadedDetail, artistSongs, songsRevision) {
+        val page = detail ?: return@LaunchedEffect
+        if (loadedDetail != page) return@LaunchedEffect
+        if (page !is Detail.ArtistPage && page !is Detail.ArtistSectionPage) return@LaunchedEffect
+        val extras = client.artistFeaturedReleases(artistSongs, artistAlbums)
+            .filter(::isSingleOrEp)
+        if (detail == page && extras.isNotEmpty()) {
+            artistAlbums = (artistAlbums + extras).distinctBy { it.id }
+                .sortedByDescending { it.releaseOrder }
+            loadedPages[page] = loadedPages[page]?.copy(artistAlbums = artistAlbums)
+                ?: return@LaunchedEffect
+        }
     }
     LaunchedEffect(client, query, tab) {
         if (tab == Tab.Search && query.isNotBlank()) {
             delay(300)
             try { results = client.search(query); error = null }
+            catch (cancelled: CancellationException) { throw cancelled }
             catch (t: Throwable) { error = t.message ?: "Search failed" }
         } else results = SearchResults(emptyList(), emptyList(), emptyList())
     }
+    LaunchedEffect(client, tab) {
+        if (tab == Tab.Search) {
+            val recent = async {
+                try { client.recentlyPlayedAlbums() }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { emptyList() }
+            }
+            val frequent = async {
+                try { client.frequentlyPlayedAlbums() }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { emptyList() }
+            }
+            val browseGenres = async {
+                try { client.genres() }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { emptyList() }
+            }
+            searchRecentAlbums = recent.await()
+            searchFrequentAlbums = frequent.await()
+            genres = browseGenres.await()
+        }
+    }
 
     val isHome = detail == null && tab == Tab.Home
+    LaunchedEffect(client, isHome, playerExpanded) {
+        if (isHome && !playerExpanded) {
+            try { recentAlbums = client.recentlyPlayedAlbums() }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { /* Optional shelf; keep the rest of Home usable. */ }
+        }
+    }
     val lightBars = !darkMode && !(playerExpanded && nowPlaying != null)
     LaunchedEffect(lightBars) {
         onLightSystemBars(lightBars)
     }
 
-    val shuffleAll: () -> Unit = {
-        if (!shufflingLibrary) scope.launch {
-            shufflingLibrary = true
-            try {
-                val all = client.allSongs()
-                if (all.isNotEmpty()) onShuffleSongs(all)
-                else error = "Your library has no songs to shuffle"
-            } catch (t: Throwable) {
-                error = t.message ?: "Could not shuffle your library"
-            } finally {
-                shufflingLibrary = false
-            }
-        }
-    }
-
     val chromeSky = rememberSky()
-    LaunchedEffect(tab, detail, loading, songs, artists, playlists, results) {
+    LaunchedEffect(tab, detail, loading, songs, artists, playlists, recentAlbums, sectionAlbums, settings.favoritePlaylistKeys, results) {
         chromeSky.invalidate(durationMillis = 240)
     }
-    val chromeSpace = if (nowPlaying == null) 120.dp else when (settings.miniPlayerSize) {
-        MiniPlayerSize.Small -> 180.dp
-        MiniPlayerSize.Medium -> 194.dp
-        MiniPlayerSize.Large -> 210.dp
-    }
+    val chromeSpace = chromeContentPadding(settings, nowPlaying != null)
     Box(Modifier.fillMaxSize()) {
+    PredictiveBackContent(previousPreview, !playerExpanded,
+        destinationReady = detail == null || loadedDetail == detail, onBack = {
+        if (detail != null) goBack() else selectTab(Tab.Home)
+    }, captureLayer = captureLayer) {
     if (isHome || detail is Detail.ArtistPage || detail is Detail.ArtistSectionPage || detail is Detail.AlbumPage || detail is Detail.PlaylistPage) {
         Box(Modifier.fillMaxSize()) {
             Box(Modifier.fillMaxSize().sky(chromeSky)) {
@@ -589,15 +786,21 @@ private fun LibraryScreen(
                         onArtist = { openDetail(Detail.ArtistPage(it)) },
                         onSection = { openDetail(Detail.ArtistSectionPage(page.artist, it)) },
                     )
-                    is Detail.ArtistSectionPage -> ArtistSectionScreen(
+                    is Detail.ArtistSectionPage -> homeStateHolder.SaveableStateProvider(
+                        "artist-section:${page.artist.id}:${page.section.name}") { ArtistSectionScreen(
                         page.artist, page.section, artistAlbums, artistSongs, client, darkMode,
+                        bottomPadding = chromeSpace,
+                        songColumns = settings.songViewColumns,
+                        onSongColumns = { columns -> onSettingsChange { it.copy(songViewColumns = columns) } },
+                        albumColumns = settings.albumViewColumns,
+                        onAlbumColumns = { columns -> onSettingsChange { it.copy(albumViewColumns = columns) } },
                         onBack = ::goBack,
                         onAlbum = { openDetail(Detail.AlbumPage(it)) },
                         onSong = { onPlay(it, artistSongs) },
                         onAddNext = onAddNext,
                         onShareSong = onShareSong,
                         onArtist = { openDetail(Detail.ArtistPage(it)) },
-                    )
+                    ) }
                     is Detail.AlbumPage -> AlbumReferenceScreen(
                         page.album, songs, client, darkMode,
                         onBack = ::goBack,
@@ -622,31 +825,42 @@ private fun LibraryScreen(
                         onPlaylistChanged = { songsRevision++ },
                         onAlbum = { openDetail(Detail.AlbumPage(it)) },
                         onArtist = { openDetail(Detail.ArtistPage(it)) },
+                        favorite = isFavorite(page.playlist),
+                        onFavorite = { setFavorite(page.playlist, it) },
                     )
-                    else -> ReferenceHomeScreen(
-                        albums, freshSongs, client, darkMode, loading, error,
-                        shufflingLibrary, shuffleAll,
+                    else -> homeStateHolder.SaveableStateProvider("home") {
+                        ReferenceHomeScreen(
+                        albums, recentAlbums, orderedPlaylists, client, darkMode, loading, error,
+                        sections = settings.homeSections.filterNot { it in settings.hiddenHomeSections },
+                        bottomPadding = chromeSpace,
                         onAlbum = { openDetail(Detail.AlbumPage(it)) },
-                        onPlaySong = { onPlay(it, freshSongs) },
-                        onAddNext = onAddNext,
-                        onAddToQueue = onAddToQueue,
+                        onPlaylist = { openDetail(Detail.PlaylistPage(it)) },
+                        onSection = { openDetail(Detail.HomeSectionPage(it)) },
+                        onPlaylists = { selectTab(Tab.Playlists) },
+                        isFavorite = { isFavorite(it) },
+                        onFavorite = { playlist, favorite -> setFavorite(playlist, favorite) },
                         onSettings = { openDetail(Detail.SettingsPage) },
-                    )
+                        onCustomize = { openDetail(Detail.HomeSettingsPage) },
+                        )
+                    }
                 }
             }
         }
     } else {
     Box(Modifier.fillMaxSize().sky(chromeSky)) {
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
-        .statusBarsPadding().padding(top = 20.dp)) {
+        .statusBarsPadding().padding(top = 8.dp)) {
         AppToolbar(
             title = when (val page = detail) {
+                is Detail.HomeSectionPage -> page.section.title
+                is Detail.GenrePage -> page.genre.name
                 is Detail.ArtistPage -> page.artist.name
                 is Detail.ArtistSectionPage -> page.artist.name
                 is Detail.AlbumPage -> page.album.name
                 is Detail.PlaylistPage -> page.playlist.name
                 Detail.QueuePage -> "Queue"
                 Detail.SettingsPage -> "Settings"
+                Detail.HomeSettingsPage -> "Customize Home"
                 null -> when (tab) { Tab.Home -> "Listen Now"; Tab.Artists -> "Artists";
                     Tab.Playlists -> "Playlists"; Tab.Search -> "Search" }
             },
@@ -654,13 +868,39 @@ private fun LibraryScreen(
             darkMode = darkMode,
             onSettings = if (detail == Detail.SettingsPage) null else ({ openDetail(Detail.SettingsPage) }),
             onBack = if (detail != null) ::goBack else null,
+            onScrollTop = { toolbarScope.launch {
+                when (detail) {
+                    is Detail.HomeSectionPage -> sectionGridState.animateScrollToItem(0)
+                    is Detail.GenrePage -> genreListState.animateScrollToItem(0)
+                    Detail.QueuePage -> queueListState.animateScrollToItem(0)
+                    Detail.SettingsPage -> settingsScrollState.animateScrollTo(0)
+                    Detail.HomeSettingsPage -> homeSettingsListState.animateScrollToItem(0)
+                    else -> when (tab) {
+                        Tab.Artists -> artistGridState.animateScrollToItem(0)
+                        Tab.Playlists -> playlistGridState.animateScrollToItem(0)
+                        Tab.Search -> searchListState.animateScrollToItem(0)
+                        Tab.Home -> Unit
+                    }
+                }
+            } },
         )
         if (error != null) Text(error!!, color = MaterialTheme.colorScheme.error,
             modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
 
-        Box(Modifier.weight(1f)) {
-            if (loading) CircularProgressIndicator(Modifier.align(Alignment.Center), color = accent)
+        Box(Modifier.weight(1f).padding(top = 8.dp)) {
+            if (loading || (detail is Detail.HomeSectionPage && sectionLoading) ||
+                (detail is Detail.GenrePage && loadedDetail != detail))
+                CircularProgressIndicator(Modifier.align(Alignment.Center), color = accent)
             else when (val page = detail) {
+                is Detail.HomeSectionPage -> homeStateHolder.SaveableStateProvider("home-section:${page.section.name}") {
+                    HomeAlbumGrid(sectionAlbums, client, chromeSpace, sectionGridState,
+                        columns = settings.albumViewColumns,
+                        onColumns = { columns -> onSettingsChange { it.copy(albumViewColumns = columns) } }) {
+                        openDetail(Detail.AlbumPage(it))
+                    }
+                }
+                is Detail.GenrePage -> SongList(songs, client, onPlay, onAddNext, onAddToQueue,
+                    onShuffleSongs, chromeSpace, genreListState)
                 is Detail.AlbumPage -> SongList(songs, client, onPlay, onAddNext, onAddToQueue,
                     onShuffleSongs, chromeSpace)
                 is Detail.PlaylistPage -> SongList(songs, client, onPlay, onAddNext, onAddToQueue,
@@ -671,18 +911,31 @@ private fun LibraryScreen(
                 is Detail.ArtistSectionPage -> Unit
                 Detail.QueuePage -> QueueScreen(queue, currentIndex, client,
                     onPlayQueueIndex, onRemoveFromQueue, onRestoreQueueItem, onMoveInQueue, onAddNext, onAddToQueue,
-                    chromeSpace)
-                Detail.SettingsPage -> SettingsScreen(settings, onSettingsChange, onDisconnect, chromeSpace)
+                    chromeSpace, queueListState)
+                Detail.SettingsPage -> SettingsScreen(settings, onSettingsChange, onDisconnect, chromeSpace,
+                    settingsScrollState, onCustomizeHome = { openDetail(Detail.HomeSettingsPage) })
+                Detail.HomeSettingsPage -> HomeCustomizationScreen(settings, onSettingsChange,
+                    chromeSpace, homeSettingsListState)
                 null -> when (tab) {
                     Tab.Home -> Unit
-                    Tab.Artists -> ArtistList(artists, client, chromeSpace, artistColumns,
-                        { artistColumns = it }, artistSort, { artistSort = it }) {
+                    Tab.Artists -> ArtistList(artists, client, chromeSpace, settings.artistViewColumns,
+                        { columns -> onSettingsChange { it.copy(artistViewColumns = columns) } },
+                        artistSort, { artistSort = it }, artistGridState) {
                         openDetail(Detail.ArtistPage(it))
                     }
-                    Tab.Playlists -> PlaylistList(playlists, client, chromeSpace) { openDetail(Detail.PlaylistPage(it)) }
-                    Tab.Search -> SearchContent(query, { query = it }, results, client,
+                    Tab.Playlists -> homeStateHolder.SaveableStateProvider("playlists") { PlaylistList(orderedPlaylists, client, chromeSpace,
+                        { isFavorite(it) }, { playlist, favorite -> setFavorite(playlist, favorite) },
+                        playlistGridState, settings.playlistViewColumns,
+                        { columns -> onSettingsChange { it.copy(playlistViewColumns = columns) } }) {
+                        openDetail(Detail.PlaylistPage(it))
+                    } }
+                    Tab.Search -> SearchContent(query, { query = it }, results,
+                        searchRecentAlbums.ifEmpty { recentAlbums }, searchFrequentAlbums,
+                        albums, genres, client,
                         { openDetail(Detail.ArtistPage(it)) }, { openDetail(Detail.AlbumPage(it)) },
-                        { onPlay(it, listOf(it)) }, onAddNext, onAddToQueue, chromeSpace)
+                        { onPlay(it, listOf(it)) }, onAddNext, onAddToQueue,
+                        { openDetail(Detail.GenrePage(it)) },
+                        chromeSpace, searchListState)
                 }
             }
         }
@@ -703,9 +956,11 @@ private fun LibraryScreen(
         onToggle = onTogglePlayback,
         onNext = onSkipNext,
         onPrevious = onSkipPrevious,
-        onAddNext = onAddNext,
-        onAddToQueue = onAddToQueue,
+        onAlbum = { openDetail(Detail.AlbumPage(it)) },
+        onArtist = { openDetail(Detail.ArtistPage(it)) },
+        onShareSong = onShareSong,
     )
+    }
     AnimatedVisibility(
         visible = playerExpanded && nowPlaying != null,
         modifier = Modifier.fillMaxSize().zIndex(1f),
@@ -976,124 +1231,35 @@ private fun AlbumRow(album: Album, client: SubsonicClient, onClick: () -> Unit) 
 private fun ArtistList(artists: List<Artist>, client: SubsonicClient, bottomPadding: Dp,
                        columns: Int, onColumns: (Int) -> Unit,
                        sort: ArtistSort, onSort: (ArtistSort) -> Unit,
+                       gridState: LazyGridState,
                        onArtist: (Artist) -> Unit) {
     var searchVisible by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
-    var sortMenu by remember { mutableStateOf(false) }
-    val gridState = rememberLazyGridState()
     val visible = remember(artists, searchQuery, sort) {
         sortArtists(artists.filter { it.name.contains(searchQuery.trim(), ignoreCase = true) }, sort)
     }
-    val pullDistance = with(LocalDensity.current) { 48.dp.toPx() }
-    val hideDistance = with(LocalDensity.current) { 24.dp.toPx() }
-    val scrollConnection = remember(gridState, pullDistance, hideDistance) {
-        object : NestedScrollConnection {
-            var pull = 0f
-            var away = 0f
-            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
-                if (source == NestedScrollSource.UserInput && !gridState.canScrollBackward && available.y > 0f) {
-                    pull += available.y
-                    away = 0f
-                    if (pull >= pullDistance) { searchVisible = true; pull = 0f }
-                } else if (source == NestedScrollSource.UserInput && consumed.y < 0f) {
-                    away -= consumed.y
-                    pull = 0f
-                    if (away >= hideDistance) { searchVisible = false; searchQuery = ""; away = 0f }
-                } else if (source == NestedScrollSource.UserInput) {
-                    pull = 0f
-                    away = 0f
-                }
-                return Offset.Zero
-            }
-        }
-    }
+    val scrollConnection = rememberPullSearchConnection({ gridState.canScrollBackward },
+        { searchVisible = true }, { searchVisible = false; searchQuery = "" })
     LazyVerticalGrid(columns = GridCells.Fixed(columns), state = gridState,
         modifier = Modifier.fillMaxSize().nestedScroll(scrollConnection),
         contentPadding = PaddingValues(start = 22.dp, end = 22.dp, bottom = bottomPadding),
         horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         item(span = { GridItemSpan(maxLineSpan) }) {
-            Column(Modifier.padding(top = 18.dp, bottom = 20.dp)) {
+            Column {
                 if (searchVisible) {
-                    val searchShape = CircleShape
-                    BasicTextField(searchQuery, onValueChange = { searchQuery = it },
-                        singleLine = true,
-                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = ink, fontSize = 16.sp),
-                        cursorBrush = SolidColor(ink),
-                        modifier = Modifier.fillMaxWidth().clip(searchShape)
-                            .background(ink.copy(alpha = 0.08f))
-                            .border(1.dp, ink.copy(alpha = 0.11f), searchShape)
-                            .padding(horizontal = 16.dp, vertical = 14.dp),
-                        decorationBox = { field ->
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(MaterialSymbols.RoundedFilled.Search, null, tint = muted,
-                                    modifier = Modifier.size(21.dp))
-                                Spacer(Modifier.width(12.dp))
-                                Box(Modifier.weight(1f)) {
-                                    if (searchQuery.isEmpty()) Text("Find an artist", color = muted)
-                                    field()
-                                }
-                            }
-                        })
-                    Spacer(Modifier.height(16.dp))
+                    LibrarySearchField(searchQuery, { searchQuery = it }, "Find an artist")
                 }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically) {
-                    Row(Modifier.clip(CircleShape).background(glass)
-                        .border(1.dp, ink.copy(alpha = 0.12f), CircleShape).padding(4.dp)) {
-                        listOf(1 to "List", 2 to "2", 3 to "3").forEach { (count, label) ->
-                            Box(Modifier.width(if (count == 1) 52.dp else 40.dp).height(32.dp)
-                                .clip(CircleShape)
-                                .background(if (columns == count) ink.copy(alpha = 0.16f) else Color.Transparent)
-                                .clickable { onColumns(count) }, contentAlignment = Alignment.Center) {
-                                Text(label, color = if (columns == count) ink else muted, fontSize = 13.sp,
-                                    fontWeight = if (columns == count) FontWeight.SemiBold else FontWeight.Medium)
-                            }
-                        }
-                    }
-                    Row(Modifier.height(40.dp).clip(CircleShape).background(glass)
-                        .border(1.dp, ink.copy(alpha = 0.12f), CircleShape)
-                        .clickable { sortMenu = true }.padding(horizontal = 13.dp),
-                        verticalAlignment = Alignment.CenterVertically) {
-                        Text("Sort · " + when (sort) {
-                            ArtistSort.Name -> "A–Z"; ArtistSort.NameReverse -> "Z–A"
-                            ArtistSort.MostAlbums -> "Most"; ArtistSort.FewestAlbums -> "Fewest"
-                        }, color = ink, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                        Spacer(Modifier.width(3.dp))
-                        Icon(MaterialSymbols.RoundedFilled.Keyboard_arrow_down, null, tint = muted,
-                            modifier = Modifier.size(18.dp))
-                    }
-                }
+                BrowserControls(columns, onColumns, sort,
+                    when (sort) { ArtistSort.Name -> "A–Z"; ArtistSort.NameReverse -> "Z–A"
+                        ArtistSort.MostAlbums -> "Most"; ArtistSort.FewestAlbums -> "Fewest" },
+                    listOf(ArtistSort.Name to "Name A–Z", ArtistSort.NameReverse to "Name Z–A",
+                        ArtistSort.MostAlbums to "Most albums", ArtistSort.FewestAlbums to "Fewest albums"),
+                    onSort, "Sort artists")
             }
         }
         items(visible.size, key = { visible[it].id }) { index ->
             val artist = visible[index]
             ArtistTile(artist, client, columns) { onArtist(artist) }
-        }
-    }
-    if (sortMenu) ModalBottomSheet(onDismissRequest = { sortMenu = false },
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        containerColor = MaterialTheme.colorScheme.surface,
-        scrimColor = Color.Black.copy(alpha = 0.28f),
-        shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp),
-        contentWindowInsets = { WindowInsets(0, 0, 0, 0) }, dragHandle = null) {
-        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp))
-            .background(MaterialTheme.colorScheme.surface).navigationBarsPadding().padding(bottom = 22.dp)) {
-            SheetHandle()
-            Text("Sort artists", color = ink, fontSize = 21.sp, fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.padding(start = 24.dp, top = 14.dp, bottom = 15.dp))
-            listOf(ArtistSort.Name to "Name A–Z", ArtistSort.NameReverse to "Name Z–A",
-                ArtistSort.MostAlbums to "Most albums", ArtistSort.FewestAlbums to "Fewest albums")
-                .forEach { (order, label) ->
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp)
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(if (sort == order) glass else Color.Transparent)
-                        .clickable { onSort(order); sortMenu = false }
-                        .padding(horizontal = 18.dp, vertical = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically) {
-                        Text(label, color = ink, fontSize = 16.sp, modifier = Modifier.weight(1f))
-                        if (sort == order) Icon(MaterialSymbols.RoundedFilled.Check, null, tint = ink)
-                    }
-                }
         }
     }
 }
@@ -1131,28 +1297,73 @@ private fun ArtistTile(artist: Artist, client: SubsonicClient, columns: Int, onC
 
 @Composable
 private fun PlaylistList(playlists: List<Playlist>, client: SubsonicClient, bottomPadding: Dp,
-                         onPlaylist: (Playlist) -> Unit) =
-    LazyColumn(contentPadding = PaddingValues(bottom = bottomPadding)) {
-        items(playlists, key = { it.id }) { playlist ->
-        Row(Modifier.fillMaxWidth().clickable { onPlaylist(playlist) }.padding(horizontal = 22.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically) {
-            Artwork(client, playlist.coverArt, Modifier.size(60.dp))
-            Spacer(Modifier.width(14.dp))
-            Column(Modifier.weight(1f)) {
-                Text(playlist.name, color = ink, fontSize = 17.sp, maxLines = 1,
-                    softWrap = false, overflow = TextOverflow.Clip,
-                    modifier = Modifier.fillMaxWidth().basicMarquee(iterations = Int.MAX_VALUE))
-                Text("${playlist.songCount} songs", color = muted, fontSize = 13.sp)
+                         isFavorite: (Playlist) -> Boolean, onFavorite: (Playlist, Boolean) -> Unit,
+                         gridState: LazyGridState, columns: Int, onColumns: (Int) -> Unit,
+                         onPlaylist: (Playlist) -> Unit) {
+    var sort by rememberSaveable { mutableStateOf(PlaylistSort.Library) }
+    var searchVisible by rememberSaveable { mutableStateOf(false) }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    val visible = sortPlaylists(playlists.filter {
+        searchQuery.isBlank() || it.name.contains(searchQuery, ignoreCase = true)
+    }, sort, isFavorite)
+    val searchConnection = rememberPullSearchConnection({ gridState.canScrollBackward },
+        { searchVisible = true }, { searchVisible = false; searchQuery = "" })
+    LazyVerticalGrid(columns = GridCells.Fixed(columns), state = gridState,
+        modifier = Modifier.fillMaxSize().nestedScroll(searchConnection),
+        contentPadding = PaddingValues(start = 22.dp, end = 22.dp, bottom = bottomPadding),
+        horizontalArrangement = Arrangement.spacedBy(14.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        item(key = "controls", span = { GridItemSpan(maxLineSpan) }) {
+            Column {
+            if (searchVisible) LibrarySearchField(searchQuery, { searchQuery = it }, "Find a playlist")
+            BrowserControls(columns, onColumns, sort,
+                when (sort) { PlaylistSort.Library -> "Library"; PlaylistSort.Name -> "A–Z"
+                    PlaylistSort.NameReverse -> "Z–A"; PlaylistSort.MostSongs -> "Most"
+                    PlaylistSort.FewestSongs -> "Fewest" },
+                listOf(PlaylistSort.Library to "Library order", PlaylistSort.Name to "Name A–Z",
+                    PlaylistSort.NameReverse to "Name Z–A", PlaylistSort.MostSongs to "Most songs",
+                    PlaylistSort.FewestSongs to "Fewest songs"), { sort = it }, "Sort playlists")
             }
         }
-    } }
+        if (visible.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
+            Text(if (searchQuery.isBlank()) "No playlists yet" else "No matching playlists", color = muted)
+        }
+        items(visible.size, key = { visible[it].id }) { index ->
+            val playlist = visible[index]
+            if (columns == 1) Row(Modifier.fillMaxWidth().clickable { onPlaylist(playlist) },
+                verticalAlignment = Alignment.CenterVertically) {
+                Artwork(client, playlist.coverArt, Modifier.size(60.dp))
+                Spacer(Modifier.width(14.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(playlist.name, color = ink, style = MaterialTheme.typography.bodyLarge,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("${playlist.songCount} songs", color = muted, style = MaterialTheme.typography.bodySmall)
+                }
+                FavoritePlaylistButton(playlist.name, isFavorite(playlist),
+                    onCheckedChange = { onFavorite(playlist, it) })
+            } else Column(Modifier.clickable { onPlaylist(playlist) }) {
+                Box {
+                    Artwork(client, playlist.coverArt, Modifier.fillMaxWidth().aspectRatio(1f))
+                    FavoritePlaylistButton(playlist.name, isFavorite(playlist),
+                        Modifier.align(Alignment.TopEnd).padding(4.dp).clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.background.copy(alpha = 0.82f)),
+                        onCheckedChange = { onFavorite(playlist, it) })
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(playlist.name, color = ink, style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text("${playlist.songCount} songs", color = muted, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
 
 @Composable
 private fun SongList(songs: List<Song>, client: SubsonicClient,
                      onPlay: (Song, List<Song>) -> Unit,
                      onAddNext: (Song) -> Unit, onAddToQueue: (Song) -> Unit,
-                     onShuffle: (List<Song>) -> Unit, bottomPadding: Dp) =
-    LazyColumn(contentPadding = PaddingValues(bottom = bottomPadding)) {
+                     onShuffle: (List<Song>) -> Unit, bottomPadding: Dp,
+                     listState: LazyListState = rememberLazyListState()) =
+    LazyColumn(state = listState, contentPadding = PaddingValues(bottom = bottomPadding)) {
         if (songs.isNotEmpty()) item {
             TextButton(onClick = { onShuffle(songs) }, modifier = Modifier.padding(horizontal = 16.dp)) {
                 Text("Shuffle", color = accent)
@@ -1208,31 +1419,133 @@ private fun SearchContent(
     query: String,
     onQuery: (String) -> Unit,
     results: SearchResults,
+    recentlyPlayed: List<Album>,
+    frequentlyPlayed: List<Album>,
+    libraryAlbums: List<Album>,
+    genres: List<Genre>,
     client: SubsonicClient,
     onArtist: (Artist) -> Unit,
     onAlbum: (Album) -> Unit,
     onSong: (Song) -> Unit,
     onAddNext: (Song) -> Unit,
     onAddToQueue: (Song) -> Unit,
+    onGenre: (Genre) -> Unit,
     bottomPadding: Dp,
+    listState: LazyListState,
 ) {
+    LaunchedEffect(query) { listState.scrollToItem(0) }
+    val genreArtwork = remember(client) { mutableStateMapOf<String, String?>() }
     Column {
-        OutlinedTextField(query, onQuery, label = { Text("Search your library") },
-            leadingIcon = { Icon(MaterialSymbols.RoundedFilled.Search, null) }, singleLine = true,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 8.dp))
-        LazyColumn(contentPadding = PaddingValues(bottom = bottomPadding)) {
-            if (results.artists.isNotEmpty()) item { SectionTitle("Artists") }
-            items(results.artists, key = { "artist:${it.id}" }) { artist ->
-                Row(Modifier.fillMaxWidth().clickable { onArtist(artist) }.padding(22.dp)) {
-                    Text(artist.name, color = ink)
+        LibrarySearchField(query, onQuery, "Search your library",
+            Modifier.padding(horizontal = 22.dp, vertical = 8.dp))
+        LazyColumn(state = listState, contentPadding = PaddingValues(bottom = bottomPadding)) {
+            if (query.isBlank()) {
+                if (genres.isNotEmpty()) item("search-genres") {
+                    Text("Browse genres", color = MaterialTheme.colorScheme.onBackground,
+                        style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.SemiBold),
+                        modifier = Modifier.padding(start = 22.dp, top = 20.dp, bottom = 16.dp))
+                    val colors = listOf(Color(0xFF4B466F), Color(0xFF17635E),
+                        Color(0xFF754734), Color(0xFF3B5580), Color(0xFF773F5D),
+                        Color(0xFF50672C))
+                    BoxWithConstraints(Modifier.fillMaxWidth()) {
+                        val cardWidth = (maxWidth - 56.dp) / 2
+                        LazyRow(contentPadding = PaddingValues(horizontal = 22.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            items(genres.chunked(2)) { column ->
+                                Column(Modifier.width(cardWidth),
+                                    verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    column.forEach { genre ->
+                                        SearchGenreCard(genre, client, genreArtwork,
+                                            colors[genres.indexOf(genre) % colors.size]) {
+                                            onGenre(genre)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if (recentlyPlayed.isNotEmpty()) item("search-recent") {
+                    SearchSuggestionShelf("Recently played", recentlyPlayed, client, onAlbum)
+                }
+                val recentIds = recentlyPlayed.mapTo(mutableSetOf()) { it.id }
+                val onRepeat = frequentlyPlayed.filterNot { it.id in recentIds }
+                if (onRepeat.isNotEmpty()) item("search-frequent") {
+                    SearchSuggestionShelf("In your rotation", onRepeat, client, onAlbum)
+                }
+                if (recentlyPlayed.isEmpty() && onRepeat.isEmpty() && libraryAlbums.isNotEmpty())
+                    item("search-explore") {
+                        SearchSuggestionShelf("Explore your library", libraryAlbums, client, onAlbum)
+                    }
+            }
+            if (query.isNotBlank()) {
+                if (results.artists.isNotEmpty()) item { SectionTitle("Artists") }
+                items(results.artists, key = { "artist:${it.id}" }) { artist ->
+                    ArtistTile(artist, client, 1) { onArtist(artist) }
+                }
+                if (results.albums.isNotEmpty()) item { SectionTitle("Albums") }
+                items(results.albums, key = { "album:${it.id}" }) { AlbumRow(it, client) { onAlbum(it) } }
+                if (results.songs.isNotEmpty()) item { SectionTitle("Songs") }
+                items(results.songs, key = { "song:${it.id}" }) { song ->
+                    SongRow(song, client, onClick = { onSong(song) },
+                        onAddNext = { onAddNext(song) }, onAddToQueue = { onAddToQueue(song) })
                 }
             }
-            if (results.albums.isNotEmpty()) item { SectionTitle("Albums") }
-            items(results.albums, key = { "album:${it.id}" }) { AlbumRow(it, client) { onAlbum(it) } }
-            if (results.songs.isNotEmpty()) item { SectionTitle("Songs") }
-            items(results.songs, key = { "song:${it.id}" }) { song ->
-                SongRow(song, client, onClick = { onSong(song) },
-                    onAddNext = { onAddNext(song) }, onAddToQueue = { onAddToQueue(song) })
+        }
+    }
+}
+
+@Composable
+private fun SearchGenreCard(
+    genre: Genre, client: SubsonicClient, artwork: MutableMap<String, String?>,
+    color: Color, onClick: () -> Unit,
+) {
+    LaunchedEffect(client, genre.name) {
+        if (!artwork.containsKey(genre.name)) artwork[genre.name] = try {
+            client.genreSongs(genre.name, count = 1).firstOrNull()?.let { it.coverArt ?: it.albumId }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { null }
+    }
+    Box(Modifier.fillMaxWidth().height(112.dp).clip(RoundedCornerShape(16.dp))
+        .background(Brush.linearGradient(listOf(color, color.copy(alpha = 0.72f))))
+        .clickable(onClick = onClick).semantics { contentDescription = "Browse ${genre.name}" }) {
+        val artworkId = artwork[genre.name]
+        if (artworkId != null) Artwork(client, artworkId, Modifier.size(82.dp).align(Alignment.BottomEnd)
+            .offset(x = 13.dp, y = 13.dp).rotate(14f))
+        else Text(genre.name.take(1).uppercase(), color = Color.White.copy(alpha = 0.15f),
+            fontSize = 84.sp, fontWeight = FontWeight.Bold,
+            modifier = Modifier.align(Alignment.BottomEnd).offset(x = 6.dp, y = 24.dp))
+        Text(genre.name, color = Color.White,
+            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+            maxLines = 2, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.align(Alignment.TopStart).fillMaxWidth(0.68f).padding(14.dp))
+        Text("${genre.songCount} songs", color = Color.White.copy(alpha = 0.82f),
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.align(Alignment.BottomStart).padding(14.dp))
+    }
+}
+
+@Composable
+private fun SearchSuggestionShelf(
+    title: String, albums: List<Album>, client: SubsonicClient, onAlbum: (Album) -> Unit,
+) {
+    Text(title, color = MaterialTheme.colorScheme.onBackground,
+        style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.SemiBold),
+        modifier = Modifier.padding(start = 22.dp, top = 24.dp, bottom = 16.dp))
+    LazyRow(contentPadding = PaddingValues(horizontal = 22.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        items(albums.take(12), key = { it.id }) { album ->
+            Column(Modifier.width(148.dp).clickable { onAlbum(album) }) {
+                Artwork(client, album.coverArt, Modifier.size(148.dp))
+                Spacer(Modifier.height(8.dp))
+                Column(Modifier.heightIn(min = 66.dp * LocalDensity.current.fontScale.coerceAtLeast(1f))) {
+                    Text(album.name, color = MaterialTheme.colorScheme.onBackground,
+                        style = MaterialTheme.typography.bodyMedium, maxLines = 2,
+                        overflow = TextOverflow.Ellipsis)
+                    Text(album.artist, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis)
+                }
             }
         }
     }
@@ -1245,12 +1558,14 @@ private fun SectionTitle(text: String) = Text(text, color = accent, fontSize = 1
 @Composable
 private fun SettingsScreen(
     settings: AppSettings,
-    onChange: (AppSettings) -> Unit,
+    onChange: ((AppSettings) -> AppSettings) -> Unit,
     onDisconnect: () -> Unit,
     bottomPadding: Dp,
+    scrollState: ScrollState,
+    onCustomizeHome: () -> Unit,
 ) {
     val gestures = settings.gestures
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 22.dp)) {
+    Column(Modifier.fillMaxSize().verticalScroll(scrollState).padding(horizontal = 22.dp)) {
         Text("Appearance", color = accent, fontSize = 18.sp, fontWeight = FontWeight.Medium,
             modifier = Modifier.padding(top = 20.dp, bottom = 14.dp))
         Text("Theme", color = ink, fontSize = 16.sp)
@@ -1263,7 +1578,7 @@ private fun SettingsScreen(
                 Box(Modifier.weight(1f).clip(RoundedCornerShape(14.dp))
                     .background(if (selected) ink else ink.copy(alpha = 0.09f))
                     .selectable(selected = selected, role = Role.RadioButton,
-                        onClick = { onChange(settings.copy(themePreference = mode)) })
+                        onClick = { onChange { it.copy(themePreference = mode) } })
                     .padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
                     Text(mode.name, color = if (selected) MaterialTheme.colorScheme.background else ink,
                         fontSize = 14.sp, fontWeight = FontWeight.Medium)
@@ -1275,67 +1590,100 @@ private fun SettingsScreen(
         Text("Choose a compact, balanced, or larger player.", color = muted, fontSize = 13.sp)
         Spacer(Modifier.height(12.dp))
         SettingsChoices(MiniPlayerSize.entries.map { it.name }, settings.miniPlayerSize.ordinal) { index ->
-            onChange(settings.copy(miniPlayerSize = MiniPlayerSize.entries[index]))
+            onChange { it.copy(miniPlayerSize = MiniPlayerSize.entries[index]) }
         }
         Spacer(Modifier.height(20.dp))
         Text("Navigation style", color = ink, fontSize = 16.sp)
-        Text("A clean, flat bar or Glaze’s glass pill.", color = muted, fontSize = 13.sp)
+        Text("Glaze’s glass pill or a clean, minimal bar.", color = muted, fontSize = 13.sp)
         Spacer(Modifier.height(12.dp))
-        SettingsChoices(listOf("Minimal", "Glaze"), settings.navigationStyle.ordinal) { index ->
-            onChange(settings.copy(navigationStyle = NavigationStyle.entries[index]))
+        SettingsChoices(listOf("Glaze", "Minimal"), settings.navigationStyle.ordinal) { index ->
+            onChange { it.copy(navigationStyle = NavigationStyle.entries[index]) }
         }
         Spacer(Modifier.height(20.dp))
         Text("Navigation size", color = ink, fontSize = 16.sp)
         Text("Adjust the height and icon size of the bottom bar.", color = muted, fontSize = 13.sp)
         Spacer(Modifier.height(12.dp))
         SettingsChoices(NavigationSize.entries.map { it.name }, settings.navigationSize.ordinal) { index ->
-            onChange(settings.copy(navigationSize = NavigationSize.entries[index]))
+            onChange { it.copy(navigationSize = NavigationSize.entries[index]) }
         }
         if (settings.navigationStyle == NavigationStyle.Glaze) {
             SettingsToggle("Search in navigation", "Turn off for a separate search button",
                 settings.searchInNavigation) {
-                onChange(settings.copy(searchInNavigation = it))
+                onChange { current -> current.copy(searchInNavigation = it) }
             }
         }
         SettingsToggle("Navigation labels", "Show text below the navigation icons",
             settings.navigationLabels) {
-            onChange(settings.copy(navigationLabels = it))
+            onChange { current -> current.copy(navigationLabels = it) }
         }
         Spacer(Modifier.height(12.dp))
         Text("Glass intensity", color = ink, fontSize = 16.sp)
         Text("Adjust the translucency of player controls and navigation.", color = muted, fontSize = 13.sp)
         Slider(value = settings.glassIntensity.coerceIn(0f, 1f),
-            onValueChange = { onChange(settings.copy(glassIntensity = it)) })
+            onValueChange = { value -> onChange { it.copy(glassIntensity = value) } })
+        Text("Home", color = accent, style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(top = 18.dp, bottom = 8.dp))
+        Text("Choose your sections and drag them into the order you want.", color = muted,
+            style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.height(12.dp))
+        SettingsLinkRow(MaterialSymbols.RoundedFilled.Settings, "Customize Home",
+            "Reorder and show or hide sections", onCustomizeHome)
         Text("Gestures", color = accent, fontSize = 18.sp, fontWeight = FontWeight.Medium,
             modifier = Modifier.padding(top = 18.dp, bottom = 10.dp))
         SettingsToggle("Swipe mini player", "Skip to the previous or next song",
             gestures.miniPlayerSwipe) {
-            onChange(settings.copy(gestures = gestures.copy(miniPlayerSwipe = it)))
+            onChange { current -> current.copy(gestures = current.gestures.copy(miniPlayerSwipe = it)) }
         }
         SettingsToggle("Swipe player down", "Close the full-screen player",
             gestures.playerSwipeDown) {
-            onChange(settings.copy(gestures = gestures.copy(playerSwipeDown = it)))
+            onChange { current -> current.copy(gestures = current.gestures.copy(playerSwipeDown = it)) }
         }
         SettingsToggle("Long-press mini player", "Open quick song actions",
             gestures.miniPlayerLongPress) {
-            onChange(settings.copy(gestures = gestures.copy(miniPlayerLongPress = it)))
+            onChange { current -> current.copy(gestures = current.gestures.copy(miniPlayerLongPress = it)) }
         }
         Spacer(Modifier.height(18.dp))
         Text("Swipe distance · ${gestures.sensitivityDp.roundToInt()} dp", color = ink, fontSize = 16.sp)
         Text("Increase to make gestures less sensitive.", color = muted, fontSize = 13.sp)
         Slider(value = gestures.sensitivityDp.coerceIn(40f, 160f), valueRange = 40f..160f,
-            onValueChange = { onChange(settings.copy(gestures = gestures.copy(sensitivityDp = it))) })
+            onValueChange = { value -> onChange { it.copy(gestures = it.gestures.copy(sensitivityDp = value)) } })
         Text("Playback", color = accent, fontSize = 18.sp, fontWeight = FontWeight.Medium,
             modifier = Modifier.padding(top = 18.dp, bottom = 10.dp))
         SettingsToggle("Smart shuffle", "Explore underplayed songs and avoid recent repeats",
             settings.smartShuffle) {
-            onChange(settings.copy(smartShuffle = it))
+            onChange { current -> current.copy(smartShuffle = it) }
         }
-        Spacer(Modifier.height(24.dp))
-        TextButton(onClick = onDisconnect) {
-            Text("Disconnect from server", color = ink)
-        }
+        SettingsLinkRow(MaterialSymbols.RoundedFilled.Logout, "Log out",
+            "Leave this music server", onDisconnect, danger = true)
         Spacer(Modifier.height(bottomPadding))
+    }
+}
+
+@Composable
+private fun SettingsLinkRow(icon: ImageVector, title: String, subtitle: String, onClick: () -> Unit,
+                            danger: Boolean = false) {
+    val ink = if (danger) favoriteRed else MaterialTheme.colorScheme.onBackground
+    val shape = RoundedCornerShape(18.dp)
+    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(shape)
+        .background(ink.copy(alpha = 0.07f))
+        .border(1.dp, ink.copy(alpha = 0.12f), shape)
+        .clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(42.dp).clip(CircleShape).background(ink.copy(alpha = 0.09f)),
+            contentAlignment = Alignment.Center) {
+            Icon(icon, contentDescription = null, tint = ink, modifier = Modifier.size(22.dp))
+        }
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, color = ink, style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold)
+            Text(subtitle, color = if (danger) ink.copy(alpha = 0.8f)
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall)
+        }
+        Icon(MaterialSymbols.RoundedFilled.Arrow_forward, contentDescription = null,
+            tint = if (danger) ink else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp))
     }
 }
 
@@ -1545,6 +1893,7 @@ private fun QueueScreen(
     onAddNext: (Song) -> Unit,
     onAddToQueue: (Song) -> Unit,
     bottomPadding: Dp,
+    listState: LazyListState,
 ) {
     if (queue.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -1556,6 +1905,13 @@ private fun QueueScreen(
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var removalLocked by remember { mutableStateOf(false) }
+    var searchVisible by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    val visibleIndices = queue.indices.filter { index -> searchQuery.isBlank() ||
+        queue[index].title.contains(searchQuery, ignoreCase = true) ||
+        queue[index].artist.contains(searchQuery, ignoreCase = true) }
+    val searchConnection = rememberPullSearchConnection({ listState.canScrollBackward },
+        { searchVisible = true }, { searchVisible = false; searchQuery = "" })
     LaunchedEffect(removalLocked) {
         if (removalLocked) {
             delay(600)
@@ -1563,8 +1919,14 @@ private fun QueueScreen(
         }
     }
     Box(Modifier.fillMaxSize()) {
-    LazyColumn(contentPadding = PaddingValues(bottom = bottomPadding)) {
-        items(queue.size, key = { "${queue[it].id}:$it" }) { index ->
+    LazyColumn(state = listState, modifier = Modifier.nestedScroll(searchConnection),
+        contentPadding = PaddingValues(bottom = bottomPadding)) {
+        if (searchVisible) item { LibrarySearchField(searchQuery, { searchQuery = it },
+            "Find in queue", Modifier.padding(horizontal = 22.dp, vertical = 8.dp)) }
+        if (searchQuery.isNotBlank() && visibleIndices.isEmpty()) item {
+            Text("No matching songs", color = muted, modifier = Modifier.padding(22.dp))
+        }
+        items(visibleIndices, key = { "${queue[it].id}:$it" }) { index ->
             val song = queue[index]
             if (index == currentIndex) SectionTitle("Playing now")
             if (index == currentIndex + 1) {

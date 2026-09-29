@@ -7,6 +7,7 @@ import com.liquidglass.shared.MiniPlayerSize
 import com.liquidglass.shared.NavigationStyle
 import com.liquidglass.shared.NavigationSize
 import com.liquidglass.shared.ThemePreference
+import com.liquidglass.shared.restoreHomeLayout
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 
@@ -16,6 +17,8 @@ class SettingsStore @Inject constructor(@ApplicationContext context: Context) {
     fun load(): AppSettings {
         val defaults = AppSettings()
         val gestures = defaults.gestures
+        val (homeSections, hiddenHomeSections) = restoreHomeLayout(
+            prefs.getString("home_sections", null), prefs.getString("hidden_home_sections", null))
         return AppSettings(
             gestures = GestureConfig(
                 miniPlayerSwipe = prefs.getBoolean("mini_player_swipe", gestures.miniPlayerSwipe),
@@ -39,6 +42,13 @@ class SettingsStore @Inject constructor(@ApplicationContext context: Context) {
             }.getOrDefault(defaults.navigationStyle),
             searchInNavigation = prefs.getBoolean("search_in_navigation", defaults.searchInNavigation),
             navigationLabels = prefs.getBoolean("navigation_labels", defaults.navigationLabels),
+            favoritePlaylistKeys = prefs.getStringSet("favorite_playlists", emptySet())?.toSet() ?: emptySet(),
+            homeSections = homeSections,
+            hiddenHomeSections = hiddenHomeSections,
+            artistViewColumns = prefs.getInt("artist_view_columns", defaults.artistViewColumns).coerceIn(1, 3),
+            playlistViewColumns = prefs.getInt("playlist_view_columns", defaults.playlistViewColumns).coerceIn(1, 3),
+            albumViewColumns = prefs.getInt("album_view_columns", defaults.albumViewColumns).coerceIn(1, 3),
+            songViewColumns = prefs.getInt("song_view_columns", defaults.songViewColumns).coerceIn(1, 3),
         )
     }
 
@@ -56,6 +66,13 @@ class SettingsStore @Inject constructor(@ApplicationContext context: Context) {
             .putString("navigation_style", settings.navigationStyle.name)
             .putBoolean("search_in_navigation", settings.searchInNavigation)
             .putBoolean("navigation_labels", settings.navigationLabels)
+            .putStringSet("favorite_playlists", settings.favoritePlaylistKeys)
+            .putString("home_sections", settings.homeSections.joinToString(",") { it.name })
+            .putString("hidden_home_sections", settings.hiddenHomeSections.joinToString(",") { it.name })
+            .putInt("artist_view_columns", settings.artistViewColumns)
+            .putInt("playlist_view_columns", settings.playlistViewColumns)
+            .putInt("album_view_columns", settings.albumViewColumns)
+            .putInt("song_view_columns", settings.songViewColumns)
             .apply()
     }
 }

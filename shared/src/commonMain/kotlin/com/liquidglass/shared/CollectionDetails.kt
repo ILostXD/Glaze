@@ -3,11 +3,11 @@ package com.liquidglass.shared
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
@@ -77,7 +77,6 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
@@ -94,6 +93,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import com.liquidglass.shared.resources.Res
+import com.liquidglass.shared.resources.am_lossless
 import com.composables.icons.materialsymbols.MaterialSymbols
 import com.composables.icons.materialsymbols.roundedfilled.Album
 import com.composables.icons.materialsymbols.roundedfilled.Arrow_back
@@ -104,13 +105,13 @@ import com.composables.icons.materialsymbols.roundedfilled.Delete
 import com.composables.icons.materialsymbols.roundedfilled.Drag_handle
 import com.composables.icons.materialsymbols.roundedfilled.Edit
 import com.composables.icons.materialsymbols.roundedfilled.Favorite
+import com.composables.icons.materialsymbols.rounded.Favorite as FavoriteOutline
 import com.composables.icons.materialsymbols.roundedfilled.More_vert
 import com.composables.icons.materialsymbols.roundedfilled.Person
 import com.composables.icons.materialsymbols.roundedfilled.Play_arrow
 import com.composables.icons.materialsymbols.roundedfilled.Playlist_add
 import com.composables.icons.materialsymbols.roundedfilled.Queue_music
 import com.composables.icons.materialsymbols.roundedfilled.Share
-import com.composables.icons.materialsymbols.roundedfilled.Search
 import com.composables.icons.materialsymbols.roundedfilled.Shuffle
 import com.skydoves.cloudy.cloudy
 import com.skydoves.cloudy.rememberSky
@@ -121,6 +122,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import org.jetbrains.compose.resources.painterResource
 import kotlin.math.roundToInt
 import kotlin.math.abs
 
@@ -133,12 +135,18 @@ internal fun AlbumCollectionScreen(
     onAlbum: (Album) -> Unit, onArtist: (Artist) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    var favorite by remember(album.id) { mutableStateOf(album.starred) }
+    var favorite by remember(client, album.id) { mutableStateOf(album.starred) }
+    var favoriteLoading by remember(client, album.id) { mutableStateOf(true) }
+    var favoritePending by remember(client, album.id) { mutableStateOf(false) }
+    var favoriteChanged by remember(client, album.id) { mutableStateOf(false) }
+    val snackbar = remember(client, album.id) { SnackbarHostState() }
     var selectedSong by remember { mutableStateOf<Song?>(null) }
     var albumArtists by remember(album.id) { mutableStateOf(album.artists) }
     var moreFromArtists by remember(album.id) { mutableStateOf(emptyList<Pair<Artist, List<Album>>>()) }
     var similarAlbums by remember(album.id) { mutableStateOf(emptyList<Album>()) }
     var similarLoading by remember(album.id) { mutableStateOf(true) }
+    var searchQuery by remember(album.id) { mutableStateOf("") }
+    var searchVisible by remember(album.id) { mutableStateOf(false) }
     var releaseDate by remember(album.id) { mutableStateOf(album.releaseDate) }
     var canonicalAlbum by remember(album.id) { mutableStateOf<Album?>(null) }
     var showAlbumArtists by remember(album.id) { mutableStateOf(false) }
@@ -147,6 +155,8 @@ internal fun AlbumCollectionScreen(
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { null }
         canonicalAlbum = details
+        if (!favoriteChanged) favorite = details?.starred ?: album.starred
+        favoriteLoading = false
         releaseDate = details?.releaseDate ?: album.releaseDate
         val artists = (details?.artists.orEmpty().ifEmpty { album.artists }).ifEmpty {
             try { songs.firstOrNull()?.let { client.songArtists(it.id) }.orEmpty()
@@ -173,7 +183,7 @@ internal fun AlbumCollectionScreen(
         similarAlbums = emptyList()
         var related = emptyList<Song>()
         for (seed in songs.take(2)) {
-            val candidates = try { client.similarSongs(seed.id, 18) }
+            val candidates = try { client.similarSongs(seed.id, 12) }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { emptyList() }
             related = candidates.filter {
@@ -181,23 +191,30 @@ internal fun AlbumCollectionScreen(
             }
             if (related.isNotEmpty()) break
         }
-        similarAlbums = related
-            .distinctBy { it.albumId }.take(12).map { related ->
-                Album(related.albumId!!, related.album, related.artist, related.coverArt)
-            }
+        similarAlbums = recommendationAlbums(client, related)
         similarLoading = false
     }
     val displayAlbum = canonicalAlbum ?: album
+    val visibleSongs = songs.filter { searchQuery.isBlank() ||
+        it.title.contains(searchQuery, ignoreCase = true) ||
+        it.artist.contains(searchQuery, ignoreCase = true) }
     CollectionSurface(album.name, displayAlbum.coverArt ?: album.coverArt, darkMode, onArtworkColor, onBack,
-        onShare = { onShare("${displayAlbum.name} — ${displayAlbum.artist}") }) {
+        onShare = { onShare("${displayAlbum.name} — ${displayAlbum.artist}") }, snackbar = snackbar,
+        onPullAtTop = { searchVisible = true },
+        onScrollAway = { if (searchVisible) { searchVisible = false; searchQuery = "" } },
+        headerItemIndex = 3) {
+        item { if (searchVisible) LibrarySearchField(searchQuery, { searchQuery = it },
+            "Find in album", Modifier.padding(horizontal = 18.dp, vertical = 8.dp)) }
+        item { Spacer(Modifier.height(32.dp)) }
         item {
+            val lossless = songs.any { song -> song.suffix.equals("flac", true) }
             val metadata = listOfNotNull(
                 songs.firstOrNull()?.genre?.takeIf { it.isNotBlank() },
                 displayAlbum.year?.toString(),
-                "Lossless".takeIf { songs.any { song -> song.suffix.equals("flac", true) } },
             ).joinToString(" · ").ifBlank { null }
             CollectionHeader(displayAlbum.name, displayAlbum.artist, metadata,
                 displayAlbum.coverArt ?: album.coverArt, client,
+                lossless = lossless,
                 onSubtitleClick = if (albumArtists.isEmpty()) null else {{
                     if (albumArtists.size == 1) onArtist(albumArtists.first())
                     else showAlbumArtists = true
@@ -207,22 +224,35 @@ internal fun AlbumCollectionScreen(
             CollectionControls(
                 darkMode, onShuffle, onPlayAll,
                 favorite = favorite,
+                favoriteEnabled = !favoriteLoading && !favoritePending,
                 onFavorite = {
-                    val next = !favorite
-                    scope.launch {
-                        try { client.setAlbumStarred(album.id, next); favorite = next }
-                        catch (cancelled: CancellationException) { throw cancelled }
-                        catch (_: Exception) { }
+                    if (!favoriteLoading && !favoritePending) {
+                        val before = favorite
+                        favorite = !before
+                        favoriteChanged = true
+                        favoritePending = true
+                        scope.launch {
+                            var failed = false
+                            try { client.setAlbumStarred(album.id, !before) }
+                            catch (cancelled: CancellationException) { favorite = before; throw cancelled }
+                            catch (_: Exception) { favorite = before; failed = true }
+                            finally { favoritePending = false }
+                            if (failed) snackbar.showSnackbar("Could not update album favorite")
+                        }
                     }
                 },
             )
         }
         item { CollectionDivider() }
-        itemsIndexed(songs, key = { _, song -> "track-${song.id}" }) { rowIndex, song ->
+        itemsIndexed(visibleSongs, key = { _, song -> "track-${song.id}" }) { rowIndex, song ->
             CollectionSwipeRow(false, onPlayNext = { onAddNext(song) }) {
                 CollectionTrackRow(song, song.track, false, client, onPlaySong,
                     dividerAbove = rowIndex > 0) { selectedSong = song }
             }
+        }
+        if (searchQuery.isNotBlank() && visibleSongs.isEmpty()) item {
+            Text("No matching songs", color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(22.dp))
         }
         item {
             AlbumFooter(songs.size, songs.sumOf { it.durationSeconds.toLong() },
@@ -254,6 +284,15 @@ internal fun AlbumCollectionScreen(
         })
 }
 
+internal suspend fun recommendationAlbums(client: SubsonicClient, songs: List<Song>): List<Album> =
+    coroutineScope {
+        songs.mapNotNull { it.albumId }.distinct().take(6).map { id -> async {
+            try { client.albumDetails(id) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { null }
+        } }.awaitAll().filterNotNull()
+    }
+
 @Composable
 internal fun PlaylistReferenceScreen(
     playlist: Playlist, songs: List<Song>, client: SubsonicClient, darkMode: Boolean,
@@ -262,10 +301,11 @@ internal fun PlaylistReferenceScreen(
     onShare: (String) -> Unit, onArtworkColor: suspend (String?) -> Color,
     onPlaylistChanged: () -> Unit, onAlbum: (Album) -> Unit,
     onArtist: (Artist) -> Unit,
+    favorite: Boolean, onFavorite: (Boolean) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
-    var selectedSong by remember { mutableStateOf<Song?>(null) }
+    var selectedSong by remember { mutableStateOf<IndexedValue<Song>?>(null) }
     var recommendations by remember(playlist.id) { mutableStateOf(emptyList<Song>()) }
     var addingId by remember { mutableStateOf<String?>(null) }
     var orderedSongs by remember(playlist.id) { mutableStateOf(songs) }
@@ -405,27 +445,8 @@ internal fun PlaylistReferenceScreen(
             }
         }, snackbar = snackbar, headerItemIndex = 3) {
         item { if (!editing && searchVisible) {
-            BasicTextField(searchQuery, onValueChange = { searchQuery = it },
-                singleLine = true,
-                textStyle = MaterialTheme.typography.bodyMedium.copy(
-                    color = MaterialTheme.colorScheme.onBackground),
-                cursorBrush = SolidColor(MaterialTheme.colorScheme.onBackground),
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 8.dp)
-                    .clip(RoundedCornerShape(9.dp))
-                    .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f))
-                    .padding(horizontal = 15.dp, vertical = 13.dp),
-                decorationBox = { field ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(MaterialSymbols.RoundedFilled.Search, null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(Modifier.width(10.dp))
-                        Box {
-                            if (searchQuery.isEmpty()) Text("Find in playlist",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            field()
-                        }
-                    }
-                })
+            LibrarySearchField(searchQuery, { searchQuery = it }, "Find in playlist",
+                Modifier.padding(horizontal = 18.dp, vertical = 8.dp))
         } }
         item { Spacer(Modifier.height(32.dp)) }
         item {
@@ -435,7 +456,9 @@ internal fun PlaylistReferenceScreen(
                 artworkId, client,
             )
         }
-        item { PlaylistControls(darkMode, onShuffle, onPlayAll) }
+        item { CollectionControls(darkMode, onShuffle, onPlayAll,
+            favorite = favorite, favoriteLabel = "playlist",
+            onFavorite = { onFavorite(!favorite) }) }
         if (editError != null) item {
             Text(editError!!, color = MaterialTheme.colorScheme.error,
                 modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp))
@@ -462,7 +485,7 @@ internal fun PlaylistReferenceScreen(
                     .offset { IntOffset(0, if (draggingIndex == index) dragY.roundToInt() else 0) }) {
                 CollectionTrackRow(song, null, true, client, onPlaySong,
                     editing = editing, dividerAbove = rowIndex > 0,
-                    onMore = { selectedSong = song })
+                    onMore = { selectedSong = IndexedValue(index, song) })
             }
         }
         if (searchQuery.isNotBlank() && visibleRows.isEmpty()) item {
@@ -488,9 +511,11 @@ internal fun PlaylistReferenceScreen(
                     Column(Modifier.weight(1f)) {
                         Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis,
                             color = MaterialTheme.colorScheme.onBackground)
-                        Text(song.artist, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        Text(song.artist, maxLines = 1, overflow = TextOverflow.Clip,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.bodySmall)
+                            style = MaterialTheme.typography.bodySmall,
+                            softWrap = false,
+                            modifier = Modifier.fillMaxWidth().basicMarquee(iterations = Int.MAX_VALUE))
                     }
                     IconButton(onClick = {
                         if (addingId == null) scope.launch {
@@ -513,9 +538,24 @@ internal fun PlaylistReferenceScreen(
             }
         }
     }
-    selectedSong?.let { song ->
+    selectedSong?.let { (index, song) ->
         CollectionSongSheet(song, client, onDismiss = { selectedSong = null },
-            onPlayNext = { onAddNext(song) }, onAlbum = onAlbum, onArtist = onArtist)
+            onPlayNext = { onAddNext(song) }, onAlbum = onAlbum, onArtist = onArtist,
+            onRemoveFromPlaylist = if (editing || saving) null else {{
+                selectedSong = null
+                scope.launch {
+                    if (index !in orderedSongs.indices || orderedSongs[index].id != song.id) {
+                        snackbar.showSnackbar("Playlist changed; open the song menu again")
+                        return@launch
+                    }
+                    try {
+                        client.removeSongFromPlaylist(playlist.id, index)
+                        orderedSongs = orderedSongs.toMutableList().apply { removeAt(index) }
+                        onPlaylistChanged()
+                    } catch (cancelled: CancellationException) { throw cancelled }
+                    catch (_: Exception) { snackbar.showSnackbar("Could not remove ${song.title}") }
+                }
+            }})
     }
 }
 
@@ -533,7 +573,12 @@ private fun CollectionSurface(
     content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    val titleIsPast by remember { derivedStateOf { listState.firstVisibleItemIndex > headerItemIndex } }
+    val titleThreshold = with(LocalDensity.current) { 160.dp.roundToPx() }
+    val titleIsPast by remember(listState, headerItemIndex, titleThreshold) { derivedStateOf {
+        listState.firstVisibleItemIndex > headerItemIndex ||
+            listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == headerItemIndex }
+                ?.let { it.offset + it.size <= titleThreshold } == true
+    } }
     var sampled by remember(artworkId) { mutableStateOf(Color(0xFF626262)) }
     LaunchedEffect(artworkId) {
         sampled = try { onArtworkColor(artworkId) }
@@ -543,7 +588,7 @@ private fun CollectionSurface(
     val (base, glow) = collectionBackdropColors(sampled, darkMode)
     val barColor by animateColorAsState(
         if (titleIsPast) base else Color.Transparent,
-        animationSpec = tween(140), label = "Collection bar color")
+        animationSpec = tween(240, easing = FastOutSlowInEasing), label = "Collection bar color")
     val sky = rememberSky()
     val pullAction by rememberUpdatedState(onPullAtTop)
     val hideAction by rememberUpdatedState(onScrollAway)
@@ -563,7 +608,9 @@ private fun CollectionSurface(
                 } else if (source == NestedScrollSource.UserInput && consumed.y < 0f) {
                     away -= consumed.y
                     pull = 0f
-                    if (away >= hideDistance) { hideAction?.invoke(); away = 0f }
+                    if (away >= hideDistance && listState.firstVisibleItemIndex <= headerItemIndex) {
+                        hideAction?.invoke(); away = 0f
+                    }
                 } else if (source == NestedScrollSource.UserInput) {
                     pull = 0f
                     away = 0f
@@ -596,24 +643,10 @@ private fun CollectionSurface(
                 content()
             }
         }
-        Box(Modifier.fillMaxWidth().background(barColor).statusBarsPadding()
-            .padding(start = 12.dp, end = 12.dp, top = 8.dp)
-            .clickable(enabled = titleIsPast) {
-                scope.launch { listState.animateScrollToItem(0) }
-            }) {
-            IconButton(onClick = onBack, modifier = Modifier.align(Alignment.CenterStart)) {
-                Icon(MaterialSymbols.RoundedFilled.Arrow_back, "Back",
-                    tint = MaterialTheme.colorScheme.onBackground)
-            }
-            Box(Modifier.fillMaxWidth().align(Alignment.Center).padding(horizontal = 112.dp),
-                contentAlignment = Alignment.Center) {
-                Crossfade(titleIsPast, animationSpec = tween(140), label = "Collection title") { visible ->
-                    if (visible) Text(title, color = MaterialTheme.colorScheme.onBackground,
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                        textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            }
-            Row(Modifier.align(Alignment.CenterEnd), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.fillMaxWidth().background(barColor).statusBarsPadding().padding(top = 8.dp)) {
+            StickyTopBar(title, titleVisible = titleIsPast,
+                onScrollTop = { scope.launch { listState.animateScrollToItem(0) } }, onBack = onBack,
+                actionCount = if (editing) 2 else 1 + (if (onEdit != null) 1 else 0)) {
                 if (editing) {
                     IconButton(onClick = { onCancel?.invoke() }) {
                         Icon(MaterialSymbols.RoundedFilled.Close, "Cancel edits",
@@ -678,6 +711,7 @@ internal fun collectionBackdropColors(sampled: Color, darkMode: Boolean): Pair<C
 private fun CollectionHeader(
     title: String, subtitle: String, metadata: String?,
     artworkId: String?, client: SubsonicClient,
+    lossless: Boolean = false,
     onSubtitleClick: (() -> Unit)? = null,
 ) {
     BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -697,11 +731,26 @@ private fun CollectionHeader(
         modifier = Modifier.fillMaxWidth().then(if (onSubtitleClick != null)
             Modifier.clickable(onClick = onSubtitleClick) else Modifier)
             .padding(horizontal = 20.dp))
-    if (metadata != null) {
+    if (metadata != null || lossless) {
         Spacer(Modifier.height(5.dp))
-        Text(metadata, color = MaterialTheme.colorScheme.onSurfaceVariant,
-            style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth())
+        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically) {
+            val color = MaterialTheme.colorScheme.onSurfaceVariant
+            if (metadata != null) {
+                Text(metadata, color = color, style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false))
+            }
+            if (lossless) {
+                if (metadata != null) Text(" · ", color = color,
+                    style = MaterialTheme.typography.bodySmall)
+                Icon(painterResource(Res.drawable.am_lossless), contentDescription = null,
+                    tint = color, modifier = Modifier.size(19.dp))
+                Spacer(Modifier.width(3.dp))
+                Text("Lossless", color = color, style = MaterialTheme.typography.bodySmall)
+            }
+        }
     }
 }
 
@@ -713,32 +762,6 @@ private fun CollectionArtwork(client: SubsonicClient, id: String?, modifier: Mod
         .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.09f))) {
         if (url != null) AsyncImage(model = url, contentDescription = null,
             contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-    }
-}
-
-@Composable
-private fun PlaylistControls(darkMode: Boolean, onShuffle: () -> Unit, onPlay: () -> Unit) {
-    val ink = MaterialTheme.colorScheme.onBackground
-    Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 25.dp, bottom = 22.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(Modifier.weight(1f).height(50.dp).clip(CircleShape)
-            .background(ink.copy(alpha = if (darkMode) 0.13f else 0.09f))
-            .clickable(onClick = onShuffle),
-            horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-            Icon(MaterialSymbols.RoundedFilled.Shuffle, null, tint = ink)
-            Spacer(Modifier.width(8.dp))
-            Text("Shuffle", color = ink,
-                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold))
-        }
-        Row(Modifier.weight(1f).height(50.dp).clip(CircleShape)
-            .background(ink).clickable(onClick = onPlay),
-            horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-            Icon(MaterialSymbols.RoundedFilled.Play_arrow, null,
-                tint = MaterialTheme.colorScheme.background)
-            Spacer(Modifier.width(8.dp))
-            Text("Play", color = MaterialTheme.colorScheme.background,
-                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold))
-        }
     }
 }
 
@@ -760,6 +783,7 @@ private fun AlbumFooter(songCount: Int, durationSeconds: Long, releaseDate: Stri
 private fun CollectionControls(
     darkMode: Boolean, onShuffle: () -> Unit, onPlay: () -> Unit,
     favorite: Boolean? = null, onFavorite: (() -> Unit)? = null,
+    favoriteEnabled: Boolean = true, favoriteLabel: String = "album",
 ) {
     val ink = MaterialTheme.colorScheme.onBackground
     val quietFill = ink.copy(alpha = if (darkMode) 0.10f else 0.07f)
@@ -782,10 +806,11 @@ private fun CollectionControls(
         Spacer(Modifier.width(16.dp))
         if (favorite != null && onFavorite != null) {
             Box(Modifier.size(51.dp).clip(CircleShape).background(quietFill)
-                .clickable(onClick = onFavorite), contentAlignment = Alignment.Center) {
-                Icon(MaterialSymbols.RoundedFilled.Favorite,
-                    if (favorite) "Remove favorite" else "Favorite album",
-                    tint = ink.copy(alpha = if (favorite) 1f else 0.45f))
+                .clickable(enabled = favoriteEnabled, onClick = onFavorite), contentAlignment = Alignment.Center) {
+                Icon(if (favorite) MaterialSymbols.RoundedFilled.Favorite else MaterialSymbols.Rounded.FavoriteOutline,
+                    if (favorite) "Unfavorite $favoriteLabel" else "Favorite $favoriteLabel",
+                    tint = if (favorite) favoriteRed.copy(alpha = if (favoriteEnabled) 1f else 0.45f)
+                        else ink.copy(alpha = if (favoriteEnabled) 0.65f else 0.25f))
             }
         } else Spacer(Modifier.size(51.dp))
     }
@@ -920,7 +945,9 @@ private fun CollectionTrackRow(
                 Text(if (showArtist) song.artist else
                     "${song.durationSeconds / 60}:${(song.durationSeconds % 60).toString().padStart(2, '0')}",
                     color = quiet, style = MaterialTheme.typography.bodySmall,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    maxLines = 1, softWrap = false, overflow = TextOverflow.Clip,
+                    modifier = if (showArtist) Modifier.weight(1f)
+                        .basicMarquee(iterations = Int.MAX_VALUE) else Modifier)
             }
         }
         if (editing) Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
@@ -952,12 +979,14 @@ private fun AlbumCarousel(
             Column(Modifier.width(148.dp).clickable { onAlbum(album) }) {
                 CollectionArtwork(client, album.coverArt, Modifier.size(148.dp))
                 Spacer(Modifier.height(7.dp))
-                Text(album.name, color = MaterialTheme.colorScheme.onBackground,
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(album.artist, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Column(Modifier.heightIn(min = 66.dp * LocalDensity.current.fontScale.coerceAtLeast(1f))) {
+                    Text(album.name, color = MaterialTheme.colorScheme.onBackground,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(album.artist, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
         }
     }
@@ -976,8 +1005,12 @@ private fun SimilarAlbumsLoading() {
     LazyRow(contentPadding = PaddingValues(horizontal = 20.dp),
         horizontalArrangement = Arrangement.spacedBy(13.dp)) {
         items(3) {
-            Box(Modifier.size(148.dp).clip(RoundedCornerShape(8.dp))
-                .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.07f)))
+            Column(Modifier.width(148.dp)) {
+                Box(Modifier.size(148.dp).clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.07f)))
+                Spacer(Modifier.height(7.dp))
+                Spacer(Modifier.height(66.dp * LocalDensity.current.fontScale.coerceAtLeast(1f)))
+            }
         }
     }
 }
@@ -1032,29 +1065,35 @@ private fun AlbumArtistSheet(
 @Composable
 internal fun CollectionSongSheet(
     song: Song, client: SubsonicClient,
-    onDismiss: () -> Unit, onPlayNext: () -> Unit,
+    onDismiss: () -> Unit, onPlayNext: (() -> Unit)?,
     onAlbum: ((Album) -> Unit)? = null, onArtist: (Artist) -> Unit,
     albumArtists: List<Artist> = emptyList(),
     onShare: ((Song) -> Unit)? = null,
+    onRemoveFromPlaylist: (() -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
     var showPlaylists by remember(song.id) { mutableStateOf(false) }
     var showArtists by remember(song.id) { mutableStateOf(false) }
-    var artistChoices by remember(song.id) { mutableStateOf(albumArtists) }
+    var artistChoices by remember(song.id) { mutableStateOf(emptyList<Artist>()) }
     var playlists by remember(song.id) { mutableStateOf(emptyList<Playlist>()) }
     var loading by remember(song.id) { mutableStateOf(false) }
-    var message by remember(song.id) { mutableStateOf<String?>(null) }
-    var favorite by remember(song.id) { mutableStateOf(song.starred) }
+    var message by remember(client, song.id) { mutableStateOf<String?>(null) }
+    var favorite by remember(client, song.id) { mutableStateOf(song.starred) }
+    var favoriteLoading by remember(client, song.id) { mutableStateOf(true) }
+    var favoritePending by remember(client, song.id) { mutableStateOf(false) }
+    val currentSong by rememberUpdatedState(client to song.id)
     LaunchedEffect(client, song.id) {
         try { favorite = client.songById(song.id)?.starred ?: favorite }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { }
+        finally { favoriteLoading = false }
     }
     LaunchedEffect(client, song.id, albumArtists) {
-        artistChoices = if (albumArtists.isNotEmpty()) albumArtists else try {
+        artistChoices = try {
             client.songArtists(song.id)
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { emptyList() }
+        artistChoices = artistChoices.ifEmpty { albumArtists }
         if (artistChoices.isEmpty() && song.artistId != null)
             artistChoices = listOf(Artist(song.artistId, song.artist))
     }
@@ -1101,13 +1140,16 @@ internal fun CollectionSongSheet(
                 Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
                     Text(song.title, color = Color.White, maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        overflow = TextOverflow.Clip,
+                        modifier = Modifier.fillMaxWidth().basicMarquee(iterations = Int.MAX_VALUE),
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Medium))
                     Text(song.artist, color = Color.LightGray, maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        overflow = TextOverflow.Clip,
+                        modifier = Modifier.fillMaxWidth().basicMarquee(iterations = Int.MAX_VALUE),
                         style = MaterialTheme.typography.bodySmall)
                     Text(song.album, color = Color.LightGray.copy(alpha = 0.82f), maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        overflow = TextOverflow.Clip,
+                        modifier = Modifier.fillMaxWidth().basicMarquee(iterations = Int.MAX_VALUE),
                         style = MaterialTheme.typography.bodySmall)
                 }
             }
@@ -1148,10 +1190,31 @@ internal fun CollectionSongSheet(
                     }
                 }
             } else {
+                SongOptionRow(if (favorite) MaterialSymbols.RoundedFilled.Favorite
+                    else MaterialSymbols.Rounded.FavoriteOutline,
+                    if (favoriteLoading) "Checking favorite…" else if (favoritePending) "Updating favorite…"
+                    else if (favorite) "Remove from favorites" else "Add to favorites",
+                    iconTint = if (favorite) favoriteRed else Color.LightGray) {
+                    if (!favoriteLoading && !favoritePending) {
+                        val before = favorite
+                        favorite = !before
+                        favoritePending = true
+                        message = null
+                        scope.launch {
+                            try {
+                                client.setSongStarred(song.id, !before)
+                                if (currentSong == (client to song.id)) onDismiss()
+                            }
+                            catch (cancelled: CancellationException) { favorite = before; throw cancelled }
+                            catch (_: Exception) { favorite = before; message = "Could not update favorite" }
+                            finally { favoritePending = false }
+                        }
+                    }
+                }
                 SongOptionRow(MaterialSymbols.RoundedFilled.Playlist_add, "Add to playlist") {
                     showPlaylists = true
                 }
-                SongOptionRow(MaterialSymbols.RoundedFilled.Queue_music, "Play next") {
+                if (onPlayNext != null) SongOptionRow(MaterialSymbols.RoundedFilled.Queue_music, "Play next") {
                     onPlayNext(); onDismiss()
                 }
                 if (onAlbum != null && song.albumId != null)
@@ -1168,15 +1231,9 @@ internal fun CollectionSongSheet(
                 if (onShare != null) SongOptionRow(MaterialSymbols.RoundedFilled.Share, "Share") {
                     onDismiss(); onShare(song)
                 }
-                SongOptionRow(MaterialSymbols.RoundedFilled.Favorite,
-                    if (favorite) "Remove from favorites" else "Add to favorites") {
-                    val next = !favorite
-                    scope.launch {
-                        try { client.setSongStarred(song.id, next); favorite = next; onDismiss() }
-                        catch (cancelled: CancellationException) { throw cancelled }
-                        catch (_: Exception) { message = "Could not update favorite" }
-                    }
-                }
+                if (onRemoveFromPlaylist != null)
+                    SongOptionRow(MaterialSymbols.RoundedFilled.Delete, "Remove from playlist",
+                        iconTint = favoriteRed) { onRemoveFromPlaylist() }
                 if (message != null) Text(message!!, color = Color.LightGray)
             }
             }

@@ -15,6 +15,10 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 
 class ServerCredentials(val serverUrl: String, val username: String, val password: String) {
     init {
@@ -69,8 +73,10 @@ data class Song(
     val samplingRate: Int? = null,
     val bitRate: Int? = null,
     val isExplicit: Boolean = false,
+    val artists: List<Artist> = emptyList(),
 )
 data class Playlist(val id: String, val name: String, val songCount: Int = 0, val coverArt: String? = null)
+data class Genre(val name: String, val songCount: Int, val albumCount: Int)
 data class SearchResults(val artists: List<Artist>, val albums: List<Album>, val songs: List<Song>)
 data class LyricLine(val startMs: Long?, val text: String)
 data class SongLyrics(val lines: List<LyricLine>, val synced: Boolean)
@@ -127,6 +133,35 @@ class SubsonicClient(
         request("getTopSongs", "artist" to name, "count" to count.toString())
             .obj("topSongs").items("song").mapNotNull(::song)
 
+    suspend fun artistSongsWithFeatures(artist: Artist): List<Song> {
+        val primary = try { artistTopSongs(artist.name) }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { emptyList() }
+        val credited = try { search(artist.name, songCount = 100).songs.filter {
+            it.artistId == artist.id || it.artists.any { credit -> credit.id == artist.id } ||
+                it.artist.contains(artist.name, ignoreCase = true) ||
+                it.title.contains(artist.name, ignoreCase = true)
+        } }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { emptyList() }
+        return (primary + credited).distinctBy { it.id }.sortedByDescending { it.playCount }
+    }
+
+    suspend fun artistFeaturedReleases(songs: List<Song>, ownAlbums: List<Album>): List<Album> {
+        val ownIds = ownAlbums.mapTo(mutableSetOf()) { it.id }
+        // ponytail: inspect 24 top-song releases; paginate search when larger catalogs need more.
+        val ids = songs.mapNotNull { it.albumId }.distinct().filterNot { it in ownIds }.take(24)
+        return ids.chunked(4).flatMap { batch ->
+            coroutineScope {
+                batch.map { id -> async {
+                    try { albumDetails(id) }
+                    catch (cancelled: CancellationException) { throw cancelled }
+                    catch (_: Exception) { null }
+                } }.awaitAll()
+            }
+        }.filterNotNull()
+    }
+
     suspend fun artistInfo(id: String): ArtistInfo {
         val info = request("getArtistInfo2", "id" to id, "count" to "12").obj("artistInfo2")
         return ArtistInfo(info.string("largeImageUrl") ?: info.string("mediumImageUrl"),
@@ -158,6 +193,25 @@ class SubsonicClient(
         request("getAlbumList2", "type" to "newest", "size" to size.coerceIn(1, 500).toString(),
             "offset" to offset.coerceAtLeast(0).toString())
             .obj("albumList2").items("album").mapNotNull(::album)
+
+    suspend fun recentlyPlayedAlbums(size: Int = 12): List<Album> =
+        request("getAlbumList2", "type" to "recent", "size" to size.coerceIn(1, 500).toString())
+            .obj("albumList2").items("album").mapNotNull(::album)
+
+    suspend fun frequentlyPlayedAlbums(size: Int = 12): List<Album> =
+        request("getAlbumList2", "type" to "frequent", "size" to size.coerceIn(1, 500).toString())
+            .obj("albumList2").items("album").mapNotNull(::album)
+
+    suspend fun genres(): List<Genre> = request("getGenres").obj("genres").items("genre")
+        .mapNotNull { value -> value.string("value")?.takeIf { it.isNotBlank() }?.let {
+            Genre(it, value.int("songCount") ?: 0, value.int("albumCount") ?: 0)
+        } }.filter { it.songCount > 0 }
+        .sortedWith(compareByDescending<Genre> { it.songCount }.thenBy { it.name.lowercase() })
+
+    suspend fun genreSongs(name: String, count: Int = 100, offset: Int = 0): List<Song> =
+        request("getSongsByGenre", "genre" to name, "count" to count.coerceIn(1, 500).toString(),
+            "offset" to offset.coerceAtLeast(0).toString())
+            .obj("songsByGenre").items("song").mapNotNull(::song)
 
     /** Enumerate the ID3 library; getAlbumList2 is paged and does not include songs. */
     suspend fun allSongs(): List<Song> {
@@ -224,9 +278,10 @@ class SubsonicClient(
         return candidates.firstOrNull { it.synced } ?: candidates.firstOrNull()
     }
 
-    suspend fun search(query: String): SearchResults {
+    suspend fun search(query: String, songCount: Int = 20): SearchResults {
         if (query.isBlank()) return SearchResults(emptyList(), emptyList(), emptyList())
-        val result = request("search3", "query" to query.trim()).obj("searchResult3")
+        val result = request("search3", "query" to query.trim(),
+            "songCount" to songCount.coerceIn(1, 500).toString()).obj("searchResult3")
         return SearchResults(
             result.items("artist").mapNotNull(::artist),
             result.items("album").mapNotNull(::album),
@@ -296,7 +351,8 @@ private fun song(value: JsonObject): Song? = value.string("id")?.let {
         value.string("coverArt"), value.int("duration") ?: 0, value.int("track"), value.string("genre"),
         value.int("playCount") ?: 0, value.string("created"), value.string("starred") != null,
         value.string("suffix"), value.int("samplingRate"), value.int("bitRate"),
-        value.string("explicitStatus")?.equals("explicit", ignoreCase = true) == true)
+        value.string("explicitStatus")?.equals("explicit", ignoreCase = true) == true,
+        value.items("artists").mapNotNull(::artist))
 }
 private fun playlist(value: JsonObject): Playlist? = value.string("id")?.let {
     Playlist(it, value.string("name") ?: "Untitled playlist", value.int("songCount") ?: 0,

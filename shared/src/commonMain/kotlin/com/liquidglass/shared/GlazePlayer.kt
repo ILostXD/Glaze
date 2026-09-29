@@ -120,7 +120,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import coil3.compose.AsyncImage
 import com.composables.icons.materialsymbols.MaterialSymbols
-import com.composables.icons.materialsymbols.rounded.Star
+import com.composables.icons.materialsymbols.rounded.Favorite as FavoriteOutline
 import com.composables.icons.materialsymbols.roundedfilled.Album
 import com.composables.icons.materialsymbols.roundedfilled.Arrow_back
 import com.composables.icons.materialsymbols.roundedfilled.Delete
@@ -142,7 +142,7 @@ import com.composables.icons.materialsymbols.roundedfilled.Shuffle
 import com.composables.icons.materialsymbols.roundedfilled.Skip_next
 import com.composables.icons.materialsymbols.roundedfilled.Skip_previous
 import com.composables.icons.materialsymbols.roundedfilled.Speed
-import com.composables.icons.materialsymbols.roundedfilled.Star
+import com.composables.icons.materialsymbols.roundedfilled.Favorite
 import com.skydoves.cloudy.Sky
 import com.skydoves.cloudy.cloudy
 import com.skydoves.cloudy.rememberSky
@@ -161,12 +161,20 @@ private val playerWhite = Color.White
 private val playerSecondary = Color.White.copy(alpha = 0.68f)
 
 @Composable
-internal fun ExplicitBadge(color: Color, modifier: Modifier = Modifier) {
-    Text("E", color = color, fontSize = 10.sp, lineHeight = 12.sp,
-        fontWeight = FontWeight.Bold,
-        modifier = modifier.semantics { contentDescription = "Explicit" }
-            .border(1.dp, color.copy(alpha = 0.75f), RoundedCornerShape(3.dp))
-            .padding(horizontal = 3.dp))
+internal fun ExplicitBadge(color: Color, modifier: Modifier = Modifier, titleSized: Boolean = false) {
+    if (titleSized) {
+        Box(modifier.size(22.dp).semantics { contentDescription = "Explicit" }
+            .border(1.dp, color.copy(alpha = 0.75f), RoundedCornerShape(3.dp)),
+            contentAlignment = Alignment.Center) {
+            Text("E", color = color, fontSize = 18.sp, lineHeight = 20.sp, fontWeight = FontWeight.Bold)
+        }
+    } else {
+        Text("E", color = color, fontSize = 10.sp, lineHeight = 12.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = modifier.semantics { contentDescription = "Explicit" }
+                .border(1.dp, color.copy(alpha = 0.75f), RoundedCornerShape(3.dp))
+                .padding(horizontal = 3.dp))
+    }
 }
 
 @OptIn(ExperimentalAnimationApi::class, ExperimentalMaterial3Api::class)
@@ -216,11 +224,20 @@ internal fun ReferencePlayerScreen(
     var artistRefs by remember(song.id) { mutableStateOf<List<Artist>?>(null) }
     val scope = rememberCoroutineScope()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
-    val optionsSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val artistsSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var livePosition by remember(song.id) { mutableLongStateOf(positionMs) }
     var liveDuration by remember(song.id) { mutableLongStateOf(durationMs) }
     var detailedSong by remember(song.id) { mutableStateOf<Song?>(null) }
+    fun showSongArtists() {
+        scope.launch {
+            val choices = artistRefs ?: resolveTrackArtists(client, detailedSong ?: song)
+                .also { artistRefs = it }
+            when (choices.size) {
+                1 -> onViewArtist(choices.single())
+                in 2..Int.MAX_VALUE -> artistsOpen = true
+            }
+        }
+    }
     var dragDown by remember(song.id) { mutableFloatStateOf(0f) }
     val dragOffset by animateFloatAsState(
         dragDown, spring(dampingRatio = Spring.DampingRatioNoBouncy), label = "Player drag",
@@ -315,16 +332,9 @@ internal fun ReferencePlayerScreen(
                             }
                             Column(Modifier.fillMaxWidth().weight(1f).padding(horizontal = 24.dp)) {
                                 SongHeading(client, detailedSong ?: song, sky, glassTint,
-                                    onViewAlbum, {
-                                        scope.launch {
-                                            val choices = artistRefs ?: resolveTrackArtists(client, detailedSong ?: song)
-                                                .also { artistRefs = it }
-                                            when (choices.size) {
-                                                1 -> onViewArtist(choices.single())
-                                                in 2..Int.MAX_VALUE -> artistsOpen = true
-                                            }
-                                        }
-                                    }) { optionsView = SongOptionsView.Actions; optionsOpen = true }
+                                    onViewAlbum, ::showSongArtists) {
+                                    optionsView = SongOptionsView.Actions; optionsOpen = true
+                                }
                                 Spacer(Modifier.height(12.dp))
                                 PlayerProgress(detailedSong ?: song, livePosition, liveDuration, isPlaying, accent, onSeek)
                                 Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
@@ -382,6 +392,7 @@ internal fun ReferencePlayerScreen(
             }
         }
         if (optionsOpen) {
+            val optionsSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
             ModalBottomSheet(
                 onDismissRequest = { optionsOpen = false },
                 sheetState = optionsSheetState,
@@ -397,7 +408,10 @@ internal fun ReferencePlayerScreen(
                     onViewChange = { optionsView = it },
                     onClose = { optionsOpen = false },
                     onShare = onShareSong,
-                    onViewAlbum = onViewAlbum, onViewArtist = onViewArtist,
+                    onViewAlbum = onViewAlbum, onGoToArtists = {
+                        optionsOpen = false
+                        showSongArtists()
+                    },
                     playbackSpeed = playbackSpeed, onChangePlaybackSpeed = onChangePlaybackSpeed)
             }
         }
@@ -481,9 +495,17 @@ private fun SongHeading(
     onViewAlbum: (Song) -> Unit, onShowArtists: () -> Unit,
     onShowOptions: () -> Unit,
 ) {
-    var starred by remember(song.id) { mutableStateOf(song.starred) }
+    var starred by remember(client, song.id) { mutableStateOf(song.starred) }
+    var favoritePending by remember(client, song.id) { mutableStateOf(true) }
+    var favoriteError by remember(client, song.id) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
-    LaunchedEffect(song.id, song.starred) { starred = song.starred }
+    LaunchedEffect(client, song.id) {
+        try { client.songById(song.id)?.let { starred = it.starred } }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { /* Keep the playback metadata's favorite state available offline. */ }
+        finally { favoritePending = false }
+    }
+    Column {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f).padding(end = 10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -491,8 +513,8 @@ private fun SongHeading(
                     fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false,
                     overflow = TextOverflow.Clip, modifier = Modifier.weight(1f, fill = false).basicMarquee(iterations = Int.MAX_VALUE))
                 if (song.isExplicit) {
-                    Spacer(Modifier.width(6.dp))
-                    ExplicitBadge(playerSecondary)
+                    Spacer(Modifier.width(10.dp))
+                    ExplicitBadge(playerSecondary, titleSized = true)
                 }
             }
             Text(song.artist, color = playerSecondary, fontSize = 17.sp, lineHeight = 23.sp,
@@ -510,20 +532,33 @@ private fun SongHeading(
                         role = Role.Button) { onViewAlbum(song) })
         }
         GlassIconButton(
-            if (starred) MaterialSymbols.RoundedFilled.Star else MaterialSymbols.Rounded.Star,
-            if (starred) "Unstar song" else "Star song", sky, glassTint, 42.dp, 24.dp,
-            iconTint = if (starred) playerWhite else playerSecondary,
+            if (starred) MaterialSymbols.RoundedFilled.Favorite else MaterialSymbols.Rounded.FavoriteOutline,
+            if (starred) "Unfavorite song" else "Favorite song", sky, glassTint, 42.dp, 24.dp,
+            iconTint = if (starred) favoriteRed else playerSecondary,
+            enabled = !favoritePending,
         ) {
+            if (favoritePending) return@GlassIconButton
             val next = !starred
             starred = next
+            favoritePending = true
+            favoriteError = null
             scope.launch {
                 try { client.setSongStarred(song.id, next) }
-                catch (_: Exception) { starred = !next }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) {
+                    starred = !next
+                    favoriteError = "Could not update favorite. Try again."
+                } finally { favoritePending = false }
             }
         }
         Spacer(Modifier.width(8.dp))
         GlassIconButton(MaterialSymbols.RoundedFilled.More_horiz, "More options", sky, glassTint,
             42.dp, 25.dp, onClick = onShowOptions)
+    }
+    favoriteError?.let { message ->
+        Text(message, modifier = Modifier.padding(top = 6.dp), color = playerWhite,
+            style = MaterialTheme.typography.bodySmall)
+    }
     }
 }
 
@@ -1149,15 +1184,16 @@ private fun GlassIconButton(
     icon: ImageVector, label: String, sky: Sky, tint: Color,
     buttonSize: androidx.compose.ui.unit.Dp, iconSize: androidx.compose.ui.unit.Dp,
     iconTint: Color = playerWhite,
+    enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
     Box(
-        Modifier.size(buttonSize).clip(CircleShape)
+        Modifier.size(buttonSize).graphicsLayer { alpha = if (enabled) 1f else 0.5f }.clip(CircleShape)
             .cloudy(sky = sky, radius = 24, tint = tint, shape = CircleShape)
             .border(1.dp, Brush.verticalGradient(listOf(
                 Color.White.copy(alpha = 0.38f), Color.White.copy(alpha = 0.07f),
             )), CircleShape)
-            .clickable(interactionSource = remember { MutableInteractionSource() },
+            .clickable(enabled = enabled, interactionSource = remember { MutableInteractionSource() },
                 indication = null, role = Role.Button, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
@@ -1237,7 +1273,7 @@ private fun SongOptionsSheet(
     client: SubsonicClient, song: Song, artUrl: String?, view: SongOptionsView,
     onViewChange: (SongOptionsView) -> Unit,
     onClose: () -> Unit, onShare: (Song) -> Unit,
-    onViewAlbum: (Song) -> Unit, onViewArtist: (Artist) -> Unit,
+    onViewAlbum: (Song) -> Unit, onGoToArtists: () -> Unit,
     playbackSpeed: Float, onChangePlaybackSpeed: (Float) -> Unit,
 ) {
     PlatformBackHandler(enabled = view != SongOptionsView.Actions) {
@@ -1337,8 +1373,8 @@ private fun SongOptionsSheet(
                 if (song.albumId != null) SongOptionRow(MaterialSymbols.RoundedFilled.Album, "View album") {
                     onClose(); onViewAlbum(song)
                 }
-                if (song.artistId != null) SongOptionRow(MaterialSymbols.RoundedFilled.Person, "View artist") {
-                    onClose(); onViewArtist(Artist(song.artistId, song.artist))
+                if (song.artist.isNotBlank()) SongOptionRow(MaterialSymbols.RoundedFilled.Person, "View artists") {
+                    onGoToArtists()
                 }
                 SongOptionRow(MaterialSymbols.RoundedFilled.Speed, "Playback speed · ${playbackSpeed}×") {
                     onViewChange(SongOptionsView.Speeds)
@@ -1417,14 +1453,15 @@ private fun SongOptionsSheet(
 }
 
 @Composable
-internal fun SongOptionRow(icon: ImageVector, label: String, onClick: () -> Unit) {
+internal fun SongOptionRow(icon: ImageVector, label: String,
+    iconTint: Color = playerSecondary, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().clickable(
             interactionSource = remember { MutableInteractionSource() }, indication = null,
             role = Role.Button, onClick = onClick,
         )
         .padding(horizontal = 26.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically) {
-        Icon(icon, contentDescription = null, tint = playerSecondary, modifier = Modifier.size(22.dp))
+        Icon(icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(22.dp))
         Spacer(Modifier.width(18.dp))
         Text(label, color = playerWhite, fontSize = 16.sp, fontWeight = FontWeight.Normal,
             maxLines = 1, softWrap = false, overflow = TextOverflow.Clip,

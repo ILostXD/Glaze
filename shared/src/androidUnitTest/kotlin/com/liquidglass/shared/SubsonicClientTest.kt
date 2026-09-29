@@ -19,6 +19,109 @@ import kotlin.test.assertTrue
 class SubsonicClientTest {
     private val credentials = ServerCredentials("https://music.example.test", "andy", "sëcret")
 
+    @Test fun genresBrowseRealServerSongs() = runBlocking {
+        val engine = MockEngine { request ->
+            val body = when (request.url.encodedPath.substringAfterLast('/')) {
+                "getGenres.view" -> """{"subsonic-response":{"status":"ok","genres":{"genre":[{"value":"Rock","songCount":8,"albumCount":2},{"value":"Rap","songCount":24,"albumCount":4}]}}}"""
+                else -> {
+                    assertEquals("getSongsByGenre.view", request.url.encodedPath.substringAfterLast('/'))
+                    assertEquals("Rap", request.url.parameters["genre"])
+                    assertEquals("1", request.url.parameters["count"])
+                    """{"subsonic-response":{"status":"ok","songsByGenre":{"song":[{"id":"track","title":"Track","artist":"Artist","album":"Album","coverArt":"cover"}]}}}"""
+                }
+            }
+            respond(body, headers = headersOf(HttpHeaders.ContentType, "application/json"))
+        }
+        val client = SubsonicClient(credentials, HttpClient(engine))
+        try {
+            assertEquals(listOf("Rap", "Rock"), client.genres().map { it.name })
+            assertEquals("cover", client.genreSongs("Rap", count = 1).single().coverArt)
+        } finally { client.close() }
+    }
+
+    @Test fun artistSongsIncludeCreditedFeaturesWithoutUnrelatedSearchHits() = runBlocking {
+        val engine = MockEngine { request ->
+            val response = when (request.url.encodedPath.substringAfterLast('/')) {
+                "getTopSongs.view" -> """{"subsonic-response":{"status":"ok","topSongs":{"song":[{"id":"solo","title":"Solo","artist":"Artist","artistId":"a1","playCount":5}]}}}"""
+                else -> {
+                    assertEquals("search3.view", request.url.encodedPath.substringAfterLast('/'))
+                    assertEquals("100", request.url.parameters["songCount"])
+                    """{"subsonic-response":{"status":"ok","searchResult3":{"song":[{"id":"solo","title":"Solo","artist":"Artist","artistId":"a1","playCount":5},{"id":"feature","title":"Track","artist":"Someone Else","artistId":"other","artists":[{"id":"other","name":"Someone Else"},{"id":"a1","name":"Artist"}],"playCount":8},{"id":"unrelated","title":"Another Song","artist":"Someone Else","artistId":"other","playCount":9}]}}}"""
+                }
+            }
+            respond(response, headers = headersOf(HttpHeaders.ContentType, "application/json"))
+        }
+        val client = SubsonicClient(credentials, HttpClient(engine))
+        try {
+            assertEquals(listOf("feature", "solo"),
+                client.artistSongsWithFeatures(Artist("a1", "Artist")).map { it.id })
+        } finally { client.close() }
+    }
+
+    @Test fun featuredSongsAddOnlySinglesAndEpsToArtistReleases() = runBlocking {
+        val requested = mutableListOf<String>()
+        val engine = MockEngine { request ->
+            assertEquals("getAlbum.view", request.url.encodedPath.substringAfterLast('/'))
+            val id = requireNotNull(request.url.parameters["id"])
+            requested += id
+            val count = if (id == "feature-single") 1 else 12
+            respond("""{"subsonic-response":{"status":"ok","album":{"id":"$id","name":"$id","songCount":$count}}}""",
+                headers = headersOf(HttpHeaders.ContentType, "application/json"))
+        }
+        val client = SubsonicClient(credentials, HttpClient(engine))
+        try {
+            val songs = listOf("own", "feature-single", "feature-single", "feature-album")
+                .map { Song(it, it, "Artist", it, albumId = it) }
+            val releases = client.artistFeaturedReleases(songs, listOf(Album("own", "Own", "Artist")))
+            assertEquals(setOf("feature-single", "feature-album"), requested.toSet())
+            assertEquals(listOf("feature-single"), releases.filter(::isSingleOrEp).map { it.id })
+        } finally { client.close() }
+    }
+
+    @Test fun recentlyPlayedAlbumsUseServerListeningHistory() = runBlocking {
+        val engine = MockEngine { request ->
+            assertEquals("getAlbumList2.view", request.url.encodedPath.substringAfterLast('/'))
+            assertEquals("recent", request.url.parameters["type"])
+            assertEquals("12", request.url.parameters["size"])
+            respond("""{"subsonic-response":{"status":"ok","albumList2":{"album":[{"id":"recent","name":"Last listen","artist":"Artist","coverArt":"art-recent"}]}}}""",
+                headers = headersOf(HttpHeaders.ContentType, "application/json"))
+        }
+        val client = SubsonicClient(credentials, HttpClient(engine))
+        try {
+            val album = client.recentlyPlayedAlbums().single()
+            assertEquals("recent", album.id)
+            assertEquals("Last listen", album.name)
+            assertEquals("art-recent", album.coverArt)
+        } finally { client.close() }
+    }
+
+    @Test fun frequentlyPlayedAlbumsUseServerTasteRanking() = runBlocking {
+        val engine = MockEngine { request ->
+            assertEquals("getAlbumList2.view", request.url.encodedPath.substringAfterLast('/'))
+            assertEquals("frequent", request.url.parameters["type"])
+            respond("""{"subsonic-response":{"status":"ok","albumList2":{"album":[{"id":"favorite","name":"On repeat","artist":"Artist"}]}}}""",
+                headers = headersOf(HttpHeaders.ContentType, "application/json"))
+        }
+        val client = SubsonicClient(credentials, HttpClient(engine))
+        try { assertEquals("favorite", client.frequentlyPlayedAlbums().single().id) }
+        finally { client.close() }
+    }
+
+    @Test fun similarAlbumUsesAlbumArtistInsteadOfFeaturedTrackCredits() = runBlocking {
+        val engine = MockEngine { request ->
+            assertEquals("getAlbum.view", request.url.encodedPath.substringAfterLast('/'))
+            assertEquals("more-life", request.url.parameters["id"])
+            respond("""{"subsonic-response":{"status":"ok","album":{"id":"more-life","name":"More Life","artist":"Drake"}}}""",
+                headers = headersOf(HttpHeaders.ContentType, "application/json"))
+        }
+        val client = SubsonicClient(credentials, HttpClient(engine))
+        try {
+            val track = Song("gass", "GASS", "Drake, Quavo, Travis Scott", "More Life",
+                albumId = "more-life")
+            assertEquals("Drake", recommendationAlbums(client, listOf(track)).single().artist)
+        } finally { client.close() }
+    }
+
     @Test fun authenticatesEveryRequestWithSaltedToken() = runBlocking {
         val salts = mutableListOf<String>()
         val engine = MockEngine { request ->
@@ -133,6 +236,31 @@ class SubsonicClientTest {
             client.setSongStarred("song/one", true)
             client.setSongStarred("song/one", false)
             assertEquals(listOf("star.view", "unstar.view"), endpoints)
+        } finally { client.close() }
+    }
+
+    @Test fun albumFavoritesUseCanonicalStateAndOnlyTargetThatAlbum() = runBlocking {
+        val engine = MockEngine { request ->
+            val response = when (request.url.encodedPath.substringAfterLast('/')) {
+                "getAlbum.view" -> {
+                    assertEquals("album-one", request.url.parameters["id"])
+                    """{"subsonic-response":{"status":"ok","album":{"id":"album-one","name":"Album","starred":"2026-09-28T12:00:00Z"}}}"""
+                }
+                "unstar.view" -> {
+                    assertEquals(listOf("album-one"), request.url.parameters.getAll("albumId"))
+                    assertEquals(null, request.url.parameters["id"])
+                    assertEquals(null, request.url.parameters["artistId"])
+                    """{"subsonic-response":{"status":"ok"}}"""
+                }
+                else -> error("Unexpected endpoint")
+            }
+            respond(response, headers = headersOf(HttpHeaders.ContentType, "application/json"))
+        }
+        val client = SubsonicClient(credentials, HttpClient(engine))
+        try {
+            val album = requireNotNull(client.albumDetails("album-one"))
+            assertTrue(album.starred)
+            client.setAlbumStarred(album.id, false)
         } finally { client.close() }
     }
 
