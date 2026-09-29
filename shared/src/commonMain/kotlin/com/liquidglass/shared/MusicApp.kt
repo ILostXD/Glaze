@@ -43,6 +43,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -306,6 +307,8 @@ fun MusicApp(
     playbackSpeed: Float,
     onChangePlaybackSpeed: (Float) -> Unit,
     jam: JamViewState,
+    profileAvatar: ImageBitmap?,
+    onPickProfileAvatar: () -> Unit,
     jamActions: JamActions,
 ) {
     val systemDark = isSystemInDarkTheme()
@@ -400,7 +403,8 @@ fun MusicApp(
                     onClearUpcoming = onClearUpcoming,
                     playbackSpeed = playbackSpeed,
                     onChangePlaybackSpeed = onChangePlaybackSpeed,
-                    jam = jam, jamActions = jamActions)
+                    jam = jam, profileAvatar = profileAvatar,
+                    onPickProfileAvatar = onPickProfileAvatar, jamActions = jamActions)
             }
         }
         }
@@ -460,6 +464,7 @@ private fun ConnectScreen(onConnect: suspend (String, String, String) -> Result<
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun LibraryScreen(
     client: SubsonicClient,
@@ -501,6 +506,8 @@ private fun LibraryScreen(
     playbackSpeed: Float,
     onChangePlaybackSpeed: (Float) -> Unit,
     jam: JamViewState,
+    profileAvatar: ImageBitmap?,
+    onPickProfileAvatar: () -> Unit,
     jamActions: JamActions,
 ) {
     var tab by remember { mutableStateOf(Tab.Home) }
@@ -576,6 +583,22 @@ private fun LibraryScreen(
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var playerExpanded by remember { mutableStateOf(false) }
+    var jamOpen by remember { mutableStateOf(false) }
+    var jamGuestControls by remember { mutableStateOf(false) }
+    var jamQueueRequest by remember { mutableStateOf(0) }
+    LaunchedEffect(jam.pendingInvite) {
+        if (jam.pendingInvite.isNotEmpty()) jamOpen = true
+    }
+    LaunchedEffect(jam.sessionId) {
+        if (jam.sessionId.isNotEmpty() && jamOpen && nowPlaying != null) {
+            jamOpen = false
+            playerExpanded = true
+            jamQueueRequest++
+            delay(250)
+            jamGuestControls = false
+            jamOpen = true
+        }
+    }
     var loadedDetail by remember { mutableStateOf<Detail?>(null) }
     val loadedPages = remember(client, songsRevision) { mutableMapOf<Detail, LoadedPage>() }
     val homeStateHolder = rememberSaveableStateHolder()
@@ -846,6 +869,7 @@ private fun LibraryScreen(
                         onFavorite = { playlist, favorite -> setFavorite(playlist, favorite) },
                         onSettings = { openDetail(Detail.SettingsPage) },
                         onCustomize = { openDetail(Detail.HomeSettingsPage) },
+                        profileAvatar = profileAvatar,
                         )
                     }
                 }
@@ -871,6 +895,7 @@ private fun LibraryScreen(
             },
             username = client.credentials.username,
             darkMode = darkMode,
+            profileAvatar = profileAvatar,
             onSettings = if (detail == Detail.SettingsPage) null else ({ openDetail(Detail.SettingsPage) }),
             onBack = if (detail != null) ::goBack else null,
             onScrollTop = { toolbarScope.launch {
@@ -918,7 +943,9 @@ private fun LibraryScreen(
                     onPlayQueueIndex, onRemoveFromQueue, onRestoreQueueItem, onMoveInQueue, onAddNext, onAddToQueue,
                     chromeSpace, queueListState)
                 Detail.SettingsPage -> SettingsScreen(settings, onSettingsChange, onDisconnect, chromeSpace,
-                    settingsScrollState, onCustomizeHome = { openDetail(Detail.HomeSettingsPage) })
+                    settingsScrollState, onCustomizeHome = { openDetail(Detail.HomeSettingsPage) },
+                    profileAvatar = profileAvatar, username = client.credentials.username,
+                    onPickProfileAvatar = onPickProfileAvatar)
                 Detail.HomeSettingsPage -> HomeCustomizationScreen(settings, onSettingsChange,
                     chromeSpace, homeSettingsListState)
                 null -> when (tab) {
@@ -1006,7 +1033,24 @@ private fun LibraryScreen(
                 onChangePlaybackSpeed = onChangePlaybackSpeed,
                 jam = jam,
                 jamActions = jamActions,
+                onJam = { jamOpen = true },
+                openQueueForJam = jamQueueRequest,
+                onJamInvite = { jamGuestControls = false; jamOpen = true },
+                onJamSettings = { jamGuestControls = true; jamOpen = true },
             )
+        }
+    }
+    if (jamOpen) {
+        ModalBottomSheet(onDismissRequest = { jamOpen = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            modifier = Modifier.statusBarsPadding(),
+            containerColor = Color.Transparent, contentColor = Color.White,
+            shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp),
+            dragHandle = null,
+            contentWindowInsets = { WindowInsets(0, 0, 0, 0) },
+            scrimColor = Color.Black.copy(alpha = 0.28f)) {
+            JamScreen(client, jam, jamActions, nowPlaying, jamGuestControls,
+                onClose = { jamOpen = false })
         }
     }
     }
@@ -1570,9 +1614,25 @@ private fun SettingsScreen(
     bottomPadding: Dp,
     scrollState: ScrollState,
     onCustomizeHome: () -> Unit,
+    profileAvatar: ImageBitmap?,
+    username: String,
+    onPickProfileAvatar: () -> Unit,
 ) {
     val gestures = settings.gestures
     Column(Modifier.fillMaxSize().verticalScroll(scrollState).padding(horizontal = 22.dp)) {
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp))
+            .clickable(onClick = onPickProfileAvatar).padding(vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(54.dp).clip(CircleShape).background(ink.copy(alpha = 0.12f)),
+                contentAlignment = Alignment.Center) {
+                if (profileAvatar != null) Image(profileAvatar, "Your profile picture", Modifier.fillMaxSize())
+                else Text(username.take(2).uppercase(), color = ink, fontWeight = FontWeight.SemiBold)
+            }
+            Column(Modifier.padding(start = 14.dp)) {
+                Text(username, color = ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                Text("Change profile picture", color = muted, fontSize = 13.sp)
+            }
+        }
         Text("Appearance", color = accent, fontSize = 18.sp, fontWeight = FontWeight.Medium,
             modifier = Modifier.padding(top = 20.dp, bottom = 14.dp))
         Text("Theme", color = ink, fontSize = 16.sp)

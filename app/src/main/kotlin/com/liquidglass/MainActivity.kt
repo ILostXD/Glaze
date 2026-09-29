@@ -3,9 +3,12 @@ package com.liquidglass
 import android.content.ComponentName
 import android.content.Intent
 import android.graphics.BitmapFactory
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Bundle
 import android.os.Build
+import android.util.Base64
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -14,6 +17,11 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.EncodeHintType
+import com.google.zxing.qrcode.QRCodeWriter
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.MediaItem
@@ -35,6 +43,7 @@ import com.liquidglass.shared.ServerCredentials
 import com.liquidglass.shared.Song
 import com.liquidglass.shared.SubsonicClient
 import com.liquidglass.shared.shuffleSongs
+import com.liquidglass.shared.saltedToken
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -48,6 +57,7 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONObject
 import java.net.URL
+import java.io.ByteArrayOutputStream
 import kotlin.math.abs
 import javax.inject.Inject
 
@@ -78,6 +88,8 @@ class MainActivity : ComponentActivity() {
     private var controller: MediaController? = null
     private var pendingPlay: Triple<Song, List<Song>, Boolean>? = null
     private val jam = mutableStateOf(JamViewState())
+    private val profileAvatar = mutableStateOf<ImageBitmap?>(null)
+    private var jamSeedTrackIds: List<String>? = null
     private var jamSaved: JamSaved? = null
     private var jamRelay: JamRelay? = null
     private var jamSocket: WebSocket? = null
@@ -92,8 +104,16 @@ class MainActivity : ComponentActivity() {
     private var jamAdvancing = false
     private var jamLoadingTrack: String? = null
     private var lastPublished: Triple<String, Boolean, Long>? = null
+    private val avatarPicker = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) setProfileAvatar(uri)
+    }
 
     private val listener = object : Player.Listener {
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO && jam.value.isHost &&
+                jam.value.queue.isNotEmpty()) nextJamTrack()
+        }
+
         override fun onEvents(player: Player, events: Player.Events) {
             updatePlayerState(player)
             if (events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION) ||
@@ -189,12 +209,23 @@ class MainActivity : ComponentActivity() {
             window.isNavigationBarContrastEnforced = false
         }
         credentials.value = saved.load()
-        jamSaved = saved.loadJam()
+        profileAvatar.value = saved.loadJamAvatar().takeIf(String::isNotEmpty)?.let { encoded ->
+            runCatching { Base64.decode(encoded, Base64.DEFAULT).let { bytes ->
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size).asImageBitmap()
+            } }.getOrNull()
+        }
+        jamSaved = saved.loadJam()?.let { stored ->
+            if (stored.apiToken.isNotEmpty()) stored.copy(apiToken = "").also(saved::saveJam)
+            else stored
+        }
         if (jamSaved == null) jam.value = JamViewState(name = credentials.value?.username.orEmpty())
         jamSaved?.let { jam.value = JamViewState(url = it.url, name = it.name,
-            hasToken = it.apiToken.isNotEmpty(), sessionId = it.sessionId, inviteToken = it.inviteToken,
+            sessionId = it.sessionId, inviteToken = it.inviteToken,
             memberId = it.memberId,
-            connection = if (it.sessionId.isEmpty()) "Disconnected" else "Reconnecting") }
+            connection = if (it.sessionId.isEmpty()) "Disconnected" else "Reconnecting",
+            inviteQr = if (it.sessionId.isNotEmpty() && it.inviteToken.isNotEmpty())
+                makeJamQr(jamInviteLink(it.url, it.sessionId, it.inviteToken)) else null) }
+        handleJamInviteIntent(intent)
         appSettings.value = settingsStore.load()
         val token = SessionToken(this, ComponentName(this, PlaybackService::class.java))
         controllerFuture = MediaController.Builder(this, token).buildAsync().also { future ->
@@ -304,12 +335,14 @@ class MainActivity : ComponentActivity() {
                 },
                 onPlay = { song, songs -> play(song, songs) },
                 onTogglePlayback = { controller?.let {
-                    if (jam.value.sessionId.isNotEmpty() && !jam.value.isHost) return@let
+                    if (jam.value.sessionId.isNotEmpty() && !jam.value.isHost) {
+                        toggleGuestPlayback(); return@let
+                    }
                     if (it.isPlaying || shouldShowBuffering(it.playWhenReady,
                             it.mediaItemCount, it.playbackState))
                         it.pause() else it.play()
                 } },
-                onSkipNext = { if (jam.value.isHost) nextJamTrack()
+                onSkipNext = { if (jam.value.isHost || jam.value.guestPlayback) nextJamTrack()
                     else if (jam.value.sessionId.isEmpty()) controller?.seekToNextMediaItem() },
                 onSkipPrevious = { if (jam.value.sessionId.isEmpty() || jam.value.isHost)
                     controller?.seekToPreviousMediaItem() },
@@ -336,7 +369,7 @@ class MainActivity : ComponentActivity() {
                     if (artworkId == null || account == null) Color.Black
                     else withContext(Dispatchers.IO) { sampleArtworkColors(account, artworkId).second }
                 },
-                onRemoveFromQueue = { index -> controller?.removeMediaItem(index) },
+                onRemoveFromQueue = { index -> if (jam.value.sessionId.isEmpty()) controller?.removeMediaItem(index) },
                 onRestoreQueueItem = { song, index ->
                     val player = controller
                     val account = credentials.value
@@ -344,30 +377,88 @@ class MainActivity : ComponentActivity() {
                         player.addMediaItem(index.coerceIn(0, player.mediaItemCount),
                             SubsonicClient(account).use { song.toMediaItem(it) })
                 },
-                onMoveInQueue = { from, to -> controller?.moveMediaItem(from, to) },
+                onMoveInQueue = { from, to -> if (jam.value.sessionId.isEmpty()) controller?.moveMediaItem(from, to) },
                 onPlayQueueIndex = { index ->
                     controller?.seekToDefaultPosition(index)
                     controller?.play()
                 },
                 onShuffleSongs = ::shuffle,
                 jam = jam.value,
+                profileAvatar = profileAvatar.value,
+                onPickProfileAvatar = { avatarPicker.launch("image/*") },
                 jamActions = JamActions(
                     connect = ::startJam,
                     leave = ::leaveJam,
                     add = { trackId -> sendJam(JSONObject().put("type", "queue.add")
                         .put("track_id", trackId)) },
-                    vote = { itemId, vote -> sendJam(JSONObject().put("type", "queue.vote")
-                        .put("item_id", itemId).put("vote", vote)) },
                     remove = { itemId -> sendJam(JSONObject().put("type", "queue.remove")
                         .put("item_id", itemId)) },
                     next = ::nextJamTrack,
-                    toggle = { if (jam.value.isHost) controller?.let {
-                        if (it.isPlaying) it.pause() else it.play()
-                    } },
                     share = ::shareJamInvite,
+                    move = { itemId, to -> sendJam(JSONObject().put("type", "queue.move")
+                        .put("item_id", itemId).put("to_index", to)) },
+                    setGuestPlayback = { enabled -> sendJam(JSONObject().put("type", "guest_controls.set")
+                        .put("guest_playback", enabled)) },
                 ),
             )
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleJamInviteIntent(intent)
+    }
+
+    private fun handleJamInviteIntent(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_VIEW) return
+        val invite = parseJamInviteLink(intent.dataString.orEmpty()) ?: return
+        if (jam.value.sessionId.isNotEmpty()) {
+            jam.value = jam.value.copy(error = "Leave your current Jam before joining another")
+            return
+        }
+        jam.value = jam.value.copy(url = invite.first, pendingInvite = invite.second, error = null)
+    }
+
+    private fun makeJamQr(link: String) = runCatching {
+        val size = 512
+        val matrix = QRCodeWriter().encode(link, BarcodeFormat.QR_CODE, size, size,
+            mapOf(EncodeHintType.MARGIN to 1))
+        val pixels = IntArray(size * size) { index ->
+            if (matrix[index % size, index / size]) android.graphics.Color.BLACK
+            else android.graphics.Color.WHITE
+        }
+        Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888).apply {
+            setPixels(pixels, 0, size, 0, 0, size, size)
+        }.asImageBitmap()
+    }.getOrNull()
+
+    private fun setProfileAvatar(uri: Uri) {
+        runCatching {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+            require(bounds.outWidth > 0 && bounds.outHeight > 0) { "Could not read that picture" }
+            val sample = (minOf(bounds.outWidth, bounds.outHeight) / 128).coerceAtLeast(1)
+            val source = contentResolver.openInputStream(uri)?.use {
+                BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
+            } ?: error("Could not read that picture")
+            val edge = minOf(source.width, source.height)
+            val crop = Bitmap.createBitmap(source, (source.width - edge) / 2,
+                (source.height - edge) / 2, edge, edge)
+            val small = Bitmap.createScaledBitmap(crop, 96, 96, true)
+            val output = ByteArrayOutputStream()
+            small.compress(Bitmap.CompressFormat.JPEG, 60, output)
+            val bytes = output.toByteArray()
+            require(bytes.size <= 12288) { "Choose a smaller picture" }
+            source.recycle(); crop.recycle(); small.recycle()
+            Base64.encodeToString(bytes, Base64.NO_WRAP)
+        }.onSuccess { avatar ->
+            saved.saveJamAvatar(avatar)
+            val bytes = Base64.decode(avatar, Base64.DEFAULT)
+            profileAvatar.value = BitmapFactory.decodeByteArray(bytes, 0, bytes.size).asImageBitmap()
+            if (jam.value.sessionId.isNotEmpty())
+                sendJam(JSONObject().put("type", "profile.set").put("avatar", avatar))
+        }.onFailure { jam.value = jam.value.copy(error = it.message ?: "Could not use that picture") }
     }
 
     private fun shuffle(songs: List<Song>) {
@@ -378,10 +469,23 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun play(song: Song, queue: List<Song>, shuffled: Boolean = false) {
-        if (jam.value.sessionId.isNotEmpty() && !jam.value.isHost) return
+        if (jam.value.sessionId.isNotEmpty() && !jam.value.isHost) {
+            if (jam.value.guestPlayback) sendJam(JSONObject().put("type", "playback.set")
+                .put("track_id", song.id).put("playing", true).put("position_ms", 0))
+            return
+        }
         val player = controller ?: run { pendingPlay = Triple(song, queue, shuffled); return }
         val account = credentials.value ?: return
-        val ordered = if (jam.value.isHost) listOf(song) else queue.ifEmpty { listOf(song) }
+        if (jam.value.isHost && player.currentMediaItemIndex >= 0) {
+            val item = SubsonicClient(account).use { song.toMediaItem(it) }
+            val index = player.currentMediaItemIndex
+            player.replaceMediaItem(index, item)
+            player.seekToDefaultPosition(index)
+            player.prepare()
+            player.play()
+            return
+        }
+        val ordered = queue.ifEmpty { listOf(song) }
         val items = SubsonicClient(account).use { client -> ordered.map { it.toMediaItem(client) } }
         // Start each explicitly selected queue in its requested mode; never inherit a hidden order.
         player.shuffleModeEnabled = false
@@ -423,7 +527,7 @@ class MainActivity : ComponentActivity() {
 
     private fun addNext(song: Song) {
         if (jam.value.sessionId.isNotEmpty()) {
-            sendJam(JSONObject().put("type", "queue.add").put("track_id", song.id)); return
+            sendJam(JSONObject().put("type", "queue.add").put("track_id", song.id).put("next", true)); return
         }
         val player = controller ?: return
         val account = credentials.value ?: return
@@ -442,28 +546,33 @@ class MainActivity : ComponentActivity() {
         player.addMediaItem(SubsonicClient(account).use { song.toMediaItem(it) })
     }
 
-    private fun startJam(url: String, token: String, name: String, sessionId: String?) {
-        val base = runCatching { validatedJamUrl(url) }.getOrElse {
+    private fun startJam(url: String, name: String, sessionId: String?) {
+        val inviteLink = sessionId?.let(::parseJamInviteLink)
+        val base = runCatching { validatedJamUrl(inviteLink?.first ?: url) }.getOrElse {
             jam.value = jam.value.copy(error = it.message ?: "Invalid companion address"); return
         }
-        val actualToken = token.ifBlank { jamSaved?.apiToken.orEmpty() }
-        val invite = sessionId?.let(::parseJamInvite)
-        if (name.trim().isBlank() || (sessionId == null && actualToken.isBlank()) ||
-            (sessionId != null && invite == null)) {
-            jam.value = jam.value.copy(error = "Enter your name and a valid host token or invite code")
+        val account = credentials.value ?: return
+        val invite = (inviteLink?.second ?: sessionId)?.let(::parseJamInvite)
+        if (sessionId != null && invite == null) {
+            jam.value = jam.value.copy(error = "Enter a valid invite link or code")
             return
         }
+        jamSeedTrackIds = if (sessionId == null) queue.value.drop(currentIndex.intValue + 1)
+            .take(200).map(Song::id) else null
         closeJamTransport()
         val generation = jamGeneration
-        val config = JamSaved(base, if (sessionId == null) actualToken else "", name.trim())
+        val config = JamSaved(base, "", name.trim().ifBlank { account.username })
         jamSaved = config
         saved.saveJam(config)
-        jam.value = JamViewState(base, config.name, hasToken = config.apiToken.isNotEmpty(), connection = "Connecting")
-        val relay = JamRelay(base, config.apiToken)
+        jam.value = JamViewState(base, config.name, connection = "Connecting")
+        val relay = JamRelay(base)
         jamRelay = relay
         lifecycleScope.launch {
             runCatching {
-                if (sessionId == null) relay.create(config.name)
+                if (sessionId == null) {
+                    val (salt, hash) = saltedToken(account.password)
+                    relay.create(config.name, account.username, salt, hash)
+                }
                 else relay.join(invite!!.first, invite.second, config.name)
             }.onSuccess { identity ->
                 if (generation != jamGeneration) return@onSuccess
@@ -476,7 +585,10 @@ class MainActivity : ComponentActivity() {
                     inviteToken = joined.inviteToken, memberId = joined.memberId,
                     hostId = identity.snapshot.hostId, members = identity.snapshot.members,
                     queue = identity.snapshot.queue, playback = identity.snapshot.playback,
-                    connection = "Connecting", error = null)
+                    guestPlayback = identity.snapshot.guestPlayback,
+                    connection = "Connecting", error = null, pendingInvite = "",
+                    inviteQr = if (sessionId == null) makeJamQr(jamInviteLink(
+                        base, joined.sessionId, joined.inviteToken)) else null)
                 openJamSocket(joined, relay, generation)
             }.onFailure {
                 if (generation == jamGeneration)
@@ -490,7 +602,7 @@ class MainActivity : ComponentActivity() {
         if (config.memberToken.isEmpty()) return
         closeJamTransport()
         val generation = jamGeneration
-        val relay = JamRelay(config.url, config.apiToken)
+        val relay = JamRelay(config.url)
         jamRelay = relay
         openJamSocket(config, relay, generation)
     }
@@ -501,6 +613,9 @@ class MainActivity : ComponentActivity() {
                 runOnUiThread {
                     if (generation != jamGeneration) return@runOnUiThread
                     jam.value = jam.value.copy(connection = "Connected", error = null)
+                    saved.loadJamAvatar().takeIf(String::isNotEmpty)?.let { avatar ->
+                        webSocket.send(JSONObject().put("type", "profile.set").put("avatar", avatar).toString())
+                    }
                     jamHeartbeat?.cancel()
                     jamHeartbeat = lifecycleScope.launch {
                         while (isActive) {
@@ -561,14 +676,25 @@ class MainActivity : ComponentActivity() {
                     val wasConnected = jam.value.hostId.isNotEmpty()
                     jam.value = jam.value.copy(hostId = snapshot.hostId,
                         members = snapshot.members, queue = snapshot.queue,
-                        playback = snapshot.playback, connection = "Connected", error = null)
+                        playback = snapshot.playback, guestPlayback = snapshot.guestPlayback,
+                        connection = "Connected", error = null)
                     if (jam.value.isHost) {
-                        if (jamAwaitingNext || (!wasConnected && snapshot.playback.trackId.isNotEmpty())) {
+                        jamSeedTrackIds?.let { tracks ->
+                            jamSeedTrackIds = null
+                            if (tracks.isNotEmpty() && snapshot.queue.isEmpty())
+                                sendJam(JSONObject().put("type", "queue.seed")
+                                    .put("track_ids", org.json.JSONArray(tracks)))
+                        }
+                        if (snapshot.playback.trackId.isEmpty() && nowPlaying.value != null) {
+                            jamAwaitingNext = false
+                            jamAdvancing = false
+                            controller?.let(::publishHostPlayback)
+                        } else if (jamAwaitingNext || playerStateDiffers(snapshot.playback) ||
+                            (!wasConnected && snapshot.playback.trackId.isNotEmpty())) {
                             jamAwaitingNext = false
                             jamAdvancing = false
                             syncJamPlayback(forceHost = true)
-                        } else if (snapshot.playback.trackId.isEmpty() && nowPlaying.value != null)
-                            controller?.let(::publishHostPlayback)
+                        }
                     } else syncJamPlayback()
                 }
                 "heartbeat" -> {
@@ -628,7 +754,9 @@ class MainActivity : ComponentActivity() {
                     }
                     jamApplyingUntil = System.currentTimeMillis() + 1_500
                     val item = SubsonicClient(account).use { song.toMediaItem(it) }
-                    player.setMediaItem(item)
+                    if (jam.value.isHost && player.currentMediaItemIndex >= 0)
+                        player.replaceMediaItem(player.currentMediaItemIndex, item)
+                    else player.setMediaItem(item)
                     player.prepare()
                     player.seekTo(target.targetPosition(System.currentTimeMillis() + jamClockOffsetMs))
                     if (target.playing) player.play() else player.pause()
@@ -655,16 +783,33 @@ class MainActivity : ComponentActivity() {
         return false
     }
 
+    private fun playerStateDiffers(target: JamPlayback): Boolean {
+        val player = controller ?: return false
+        return player.currentMediaItem?.mediaId.orEmpty() != target.trackId ||
+            (target.trackId.isNotEmpty() && player.playWhenReady != target.playing)
+    }
+
+    private fun toggleGuestPlayback() {
+        val state = jam.value
+        if (!state.guestPlayback || state.connection != "Connected") return
+        val current = state.playback ?: return
+        if (current.trackId.isEmpty()) return
+        sendJam(JSONObject().put("type", "playback.set").put("track_id", current.trackId)
+            .put("playing", !current.playing)
+            .put("position_ms", current.targetPosition(System.currentTimeMillis() + jamClockOffsetMs)))
+    }
+
     private fun nextJamTrack() {
-        if (!jam.value.isHost || jamAwaitingNext) return
-        jamAwaitingNext = sendJam(JSONObject().put("type", "playback.next"))
-        if (!jamAwaitingNext) jamAdvancing = false
+        if ((!jam.value.isHost && !jam.value.guestPlayback) || jamAwaitingNext) return
+        val sent = sendJam(JSONObject().put("type", "playback.next"))
+        jamAwaitingNext = sent && jam.value.isHost
+        if (!sent) jamAdvancing = false
     }
 
     private fun leaveJam() {
         val config = jamSaved ?: return
         if (config.sessionId.isNotEmpty()) lifecycleScope.launch {
-            runCatching { JamRelay(config.url, config.apiToken).use {
+            runCatching { JamRelay(config.url).use {
                 it.leave(config.sessionId, config.memberToken) } }
         }
         clearJamSession()
@@ -673,7 +818,7 @@ class MainActivity : ComponentActivity() {
     private fun shareJamInvite() {
         val config = jamSaved ?: return
         if (config.inviteToken.isEmpty() || config.sessionId.isEmpty()) return
-        val text = "Join my Glaze Jam\nServer: ${config.url}\nInvite code: ${config.sessionId}:${config.inviteToken}"
+        val text = "Join my Glaze Jam: ${jamInviteLink(config.url, config.sessionId, config.inviteToken)}"
         startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
             putExtra(Intent.EXTRA_TEXT, text)
@@ -684,8 +829,8 @@ class MainActivity : ComponentActivity() {
         closeJamTransport()
         saved.clearJamSession()
         jamSaved = saved.loadJam()
-        jam.value = JamViewState(url = jamSaved?.url.orEmpty(), name = jamSaved?.name.orEmpty(),
-            hasToken = !jamSaved?.apiToken.isNullOrEmpty())
+        jam.value = JamViewState(url = jamSaved?.url ?: "https://jam.andyhserver.duckdns.org",
+            name = jamSaved?.name ?: credentials.value?.username.orEmpty())
     }
 
     private fun closeJamTransport() {

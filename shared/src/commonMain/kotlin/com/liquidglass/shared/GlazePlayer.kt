@@ -58,6 +58,7 @@ import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -70,12 +71,14 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -143,6 +146,8 @@ import com.composables.icons.materialsymbols.roundedfilled.Skip_next
 import com.composables.icons.materialsymbols.roundedfilled.Skip_previous
 import com.composables.icons.materialsymbols.roundedfilled.Speed
 import com.composables.icons.materialsymbols.roundedfilled.Favorite
+import com.composables.icons.materialsymbols.roundedfilled.Add
+import com.composables.icons.materialsymbols.roundedfilled.Settings
 import com.skydoves.cloudy.Sky
 import com.skydoves.cloudy.cloudy
 import com.skydoves.cloudy.rememberSky
@@ -213,6 +218,10 @@ internal fun ReferencePlayerScreen(
     onChangePlaybackSpeed: (Float) -> Unit,
     jam: JamViewState,
     jamActions: JamActions,
+    onJam: () -> Unit,
+    openQueueForJam: Int,
+    onJamInvite: () -> Unit,
+    onJamSettings: () -> Unit,
 ) {
     val sky = rememberSky()
     val artUrl = remember(client, song.coverArt) { song.coverArt?.let { client.coverArtUrl(it, 1024) } }
@@ -220,12 +229,24 @@ internal fun ReferencePlayerScreen(
     val glassTint = Color.White.copy(alpha = 0.05f + 0.12f * settings.glassIntensity.coerceIn(0f, 1f))
     var view by remember { mutableStateOf(PlayerView.Artwork) }
     var queueOpen by remember { mutableStateOf(false) }
+    LaunchedEffect(openQueueForJam) { if (openQueueForJam > 0) queueOpen = true }
     var optionsOpen by remember { mutableStateOf(false) }
-    var jamOpen by remember { mutableStateOf(false) }
     var optionsView by remember(song.id) { mutableStateOf(SongOptionsView.Actions) }
     var artistsOpen by remember { mutableStateOf(false) }
     var artistRefs by remember(song.id) { mutableStateOf<List<Artist>?>(null) }
     val scope = rememberCoroutineScope()
+    val jamSongs = remember(client, jam.sessionId) { mutableStateMapOf<String, Song>() }
+    LaunchedEffect(client, jam.sessionId, jam.queue.map { it.trackId }) {
+        if (jam.sessionId.isNotEmpty()) jam.queue.map { it.trackId }.distinct()
+            .filterNot(jamSongs::containsKey).forEach { id ->
+                try { client.songById(id)?.let { jamSongs[id] = it } }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { /* Keep the queue visible when one song is unavailable. */ }
+            }
+    }
+    val displayedQueue = if (jam.sessionId.isEmpty()) queue else listOf(song) + jam.queue.map { entry ->
+        jamSongs[entry.trackId] ?: Song(entry.trackId, "Loading song…", "", "")
+    }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
     val artistsSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var livePosition by remember(song.id) { mutableLongStateOf(positionMs) }
@@ -356,8 +377,17 @@ internal fun ReferencePlayerScreen(
                             active = isShuffleEnabled, onClick = onToggleShuffle)
                         PlainPlayerIcon(MaterialSymbols.RoundedFilled.Lyrics, "Lyrics", 21.dp,
                             playerSecondary) { view = PlayerView.Lyrics }
-                        PlainPlayerIcon(MaterialSymbols.RoundedFilled.Queue_music, "Queue", 21.dp,
-                            playerSecondary) { queueOpen = true }
+                        Box {
+                            PlainPlayerIcon(MaterialSymbols.RoundedFilled.Queue_music,
+                                if (jam.sessionId.isNotEmpty()) "${jam.members.firstOrNull { it.id == jam.hostId }?.name ?: "Your"}’s Jam queue" else "Queue",
+                                21.dp, playerSecondary) { queueOpen = true }
+                            if (jam.sessionId.isNotEmpty()) {
+                                Box(Modifier.align(Alignment.TopEnd)) {
+                                    JamAvatar(jam.members.firstOrNull { it.id == jam.memberId }
+                                        ?: JamMember(jam.memberId, jam.name.ifBlank { "You" }), 17)
+                                }
+                            }
+                        }
                         PlainPlayerIcon(if (repeatMode == 1) MaterialSymbols.RoundedFilled.Repeat_one else MaterialSymbols.RoundedFilled.Repeat,
                             when (repeatMode) { 1 -> "Repeat one"; 2 -> "Repeat all"; else -> "Repeat off" },
                             21.dp, if (repeatMode == 0) playerSecondary else accent,
@@ -387,10 +417,30 @@ internal fun ReferencePlayerScreen(
                 contentWindowInsets = { WindowInsets(0, 0, 0, 0) },
             ) {
                 QueueContents(
-                    client, queue, currentIndex, isPlaying, artUrl, onClearUpcoming,
-                    onPlay = { index -> onPlayQueueIndex(index); queueOpen = false },
-                    onRemove = onRemoveFromQueue, onRestore = onRestoreQueueItem,
-                    onMove = onMoveInQueue,
+                    client, displayedQueue, if (jam.sessionId.isEmpty()) currentIndex else 0,
+                    isPlaying, artUrl, onClearUpcoming,
+                    onPlay = { index ->
+                        if (jam.sessionId.isEmpty()) {
+                            onPlayQueueIndex(index)
+                            queueOpen = false
+                        } else if (index > 0 && (jam.isHost || jam.guestPlayback)) {
+                            jam.queue.getOrNull(index - 1)?.let { entry ->
+                                jamActions.move(entry.id, 0)
+                                jamActions.next()
+                                queueOpen = false
+                            }
+                        }
+                    },
+                    onRemove = { index -> if (jam.sessionId.isEmpty()) onRemoveFromQueue(index)
+                        else jam.queue.getOrNull(index - 1)?.let { jamActions.remove(it.id) } },
+                    onRestore = { restored, index -> if (jam.sessionId.isEmpty()) onRestoreQueueItem(restored, index)
+                        else jamActions.add(restored.id) },
+                    onMove = { from, to -> if (jam.sessionId.isEmpty()) onMoveInQueue(from, to)
+                        else jam.queue.getOrNull(from - 1)?.let { jamActions.move(it.id, to - 1) } },
+                    jam = jam.takeIf { it.sessionId.isNotEmpty() },
+                    onJamInvite = onJamInvite,
+                    onJamSettings = onJamSettings,
+                    onEndJam = { jamActions.leave(); queueOpen = false },
                 )
             }
         }
@@ -411,25 +461,13 @@ internal fun ReferencePlayerScreen(
                     onViewChange = { optionsView = it },
                     onClose = { optionsOpen = false },
                     onShare = onShareSong,
-                    onJam = { optionsOpen = false; jamOpen = true },
+                    onJam = { optionsOpen = false; onJam() },
                     jamActive = jam.sessionId.isNotEmpty(),
                     onViewAlbum = onViewAlbum, onGoToArtists = {
                         optionsOpen = false
                         showSongArtists()
                     },
                     playbackSpeed = playbackSpeed, onChangePlaybackSpeed = onChangePlaybackSpeed)
-            }
-        }
-        if (jamOpen) {
-            ModalBottomSheet(
-                onDismissRequest = { jamOpen = false },
-                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-                modifier = Modifier.fillMaxHeight(if (jam.sessionId.isEmpty()) 0.82f else 0.94f),
-                containerColor = Color(0xFF1F1F1F),
-                contentColor = Color.White,
-                scrimColor = Color.Black.copy(alpha = 0.65f),
-            ) {
-                JamScreen(client, jam, jamActions, 24.dp)
             }
         }
         if (artistsOpen) {
@@ -909,7 +947,19 @@ private fun QueueContents(
     isPlaying: Boolean, artUrl: String?, onClearUpcoming: () -> Unit,
     onPlay: (Int) -> Unit, onRemove: (Int) -> Unit,
     onRestore: (Song, Int) -> Unit, onMove: (Int, Int) -> Unit,
+    jam: JamViewState?, onJamInvite: () -> Unit, onJamSettings: () -> Unit,
+    onEndJam: () -> Unit,
 ) {
+    var confirmEnd by remember { mutableStateOf(false) }
+    if (confirmEnd && jam != null) AlertDialog(
+        onDismissRequest = { confirmEnd = false },
+        title = { Text(if (jam.isHost) "End this Jam?" else "Leave this Jam?") },
+        text = { Text(if (jam.isHost) "The session will end for everyone." else "The others can keep listening.") },
+        confirmButton = { TextButton(onClick = { confirmEnd = false; onEndJam() }) {
+            Text(if (jam.isHost) "End Jam" else "Leave Jam")
+        } },
+        dismissButton = { TextButton(onClick = { confirmEnd = false }) { Text("Cancel") } },
+    )
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = currentIndex.coerceIn(0, (queue.size - 1).coerceAtLeast(0)))
     var query by remember { mutableStateOf("") }
     val matchingRows = queue.withIndex().filter { (_, song) ->
@@ -974,14 +1024,38 @@ private fun QueueContents(
         SheetHandle()
         Row(Modifier.fillMaxWidth().padding(start = 22.dp, end = 22.dp, top = 10.dp, bottom = 12.dp),
             horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text("${remaining.size} songs • ${formatQueueDuration(duration)}", color = playerWhite,
-                fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-            Box(Modifier.clip(CircleShape).background(Color.White.copy(alpha = 0.15f))
+            val hostName = jam?.members?.firstOrNull { it.id == jam.hostId }?.name
+                ?: jam?.name?.ifBlank { "Your" }
+            Text(if (jam == null) "${remaining.size} songs • ${formatQueueDuration(duration)}"
+                else "${hostName}’s Jam", color = playerWhite,
+                fontSize = if (jam == null) 17.sp else 23.sp, fontWeight = FontWeight.SemiBold)
+            if (jam == null) Box(Modifier.clip(CircleShape).background(Color.White.copy(alpha = 0.15f))
                 .clickable(onClick = onClearUpcoming).padding(horizontal = 14.dp, vertical = 9.dp)) {
                 Text("Clear queue", color = playerSecondary, fontSize = 14.sp)
             }
         }
-        BasicTextField(
+        if (jam != null) Row(Modifier.fillMaxWidth().padding(start = 22.dp, end = 22.dp, bottom = 18.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(40.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.14f))
+                .clickable(onClick = onJamInvite), contentAlignment = Alignment.Center) {
+                Icon(MaterialSymbols.RoundedFilled.Add, "Invite friends", tint = playerWhite, modifier = Modifier.size(25.dp))
+            }
+            Spacer(Modifier.width(7.dp))
+            jam.members.take(4).forEach { JamAvatar(it, 35) }
+            Spacer(Modifier.weight(1f))
+            if (jam.isHost) Box(Modifier.size(40.dp).clip(CircleShape)
+                .border(1.dp, playerSecondary, CircleShape).clickable(onClick = onJamSettings),
+                contentAlignment = Alignment.Center) {
+                Icon(MaterialSymbols.RoundedFilled.Settings, "Guest controls", tint = playerWhite, modifier = Modifier.size(21.dp))
+            }
+            Spacer(Modifier.width(10.dp))
+            Box(Modifier.clip(CircleShape).background(Color.White.copy(alpha = 0.13f))
+                .clickable { confirmEnd = true }.padding(horizontal = 18.dp, vertical = 10.dp)) {
+                Text(if (jam.isHost) "End" else "Leave", color = Color(0xFFFF7B8A),
+                    fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            }
+        }
+        if (jam == null) BasicTextField(
             value = query,
             onValueChange = { query = it },
             singleLine = true,
@@ -1064,7 +1138,7 @@ private fun QueueContents(
                             onMove(index, playNextQueueIndex(index, currentIndex))
                         SwipeToDismissBoxValue.EndToStart -> if (index != currentIndex) {
                             onRemove(index)
-                            scope.launch {
+                            if (jam == null) scope.launch {
                                 if (snackbar.showSnackbar("${rowSong.title} was deleted", "Restore",
                                         duration = SnackbarDuration.Short) == SnackbarResult.ActionPerformed)
                                     onRestore(rowSong, index)
@@ -1082,7 +1156,8 @@ private fun QueueContents(
                     ).zIndex(if (dragging) 1f else 0f)
                         .offset { IntOffset(0, if (dragging) dragY.roundToInt() else 0) },
                     enableDismissFromStartToEnd = index != currentIndex && index != currentIndex + 1,
-                    enableDismissFromEndToStart = index != currentIndex,
+                    enableDismissFromEndToStart = index != currentIndex &&
+                        (jam == null || jam.isHost || jam.queue.getOrNull(index - 1)?.addedBy == jam.memberId),
                     backgroundContent = {
                         when (dismiss.dismissDirection) {
                             SwipeToDismissBoxValue.StartToEnd -> Row(
@@ -1115,7 +1190,10 @@ private fun QueueContents(
                     QueueRow(client, rowSong, index, dragging,
                         dismiss.dismissDirection != SwipeToDismissBoxValue.Settled,
                         query.isBlank() && index > currentIndex,
-                        currentIndex, isPlaying, onPlay)
+                        currentIndex, isPlaying, onPlay,
+                        jam?.queue?.getOrNull(index - 1)?.let { entry ->
+                            jam.members.firstOrNull { it.id == entry.addedBy }
+                        })
                 }
             }
         }
@@ -1129,7 +1207,7 @@ private fun QueueContents(
 @Composable
 private fun QueueRow(
     client: SubsonicClient, song: Song, index: Int, dragging: Boolean, swiping: Boolean, canMove: Boolean,
-    currentIndex: Int, isPlaying: Boolean, onPlay: (Int) -> Unit,
+    currentIndex: Int, isPlaying: Boolean, onPlay: (Int) -> Unit, addedBy: JamMember? = null,
 ) {
     val rowColor by animateColorAsState(when {
         dragging || swiping -> Color.Black
@@ -1163,6 +1241,7 @@ private fun QueueRow(
                 fontSize = 11.sp, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip,
                 modifier = Modifier.fillMaxWidth().basicMarquee(iterations = Int.MAX_VALUE))
         }
+        addedBy?.let { JamAvatar(it, 25) }
         if (index == currentIndex) PlayingWaveform(isPlaying)
         if (canMove) {
             Icon(MaterialSymbols.RoundedFilled.Drag_handle, contentDescription = "Reorder ${song.title}",
@@ -1385,7 +1464,8 @@ private fun SongOptionsSheet(
                     .clip(RoundedCornerShape(24.dp))
                     .background(Color.White.copy(alpha = 0.09f))) {
                 SongOptionRow(MaterialSymbols.RoundedFilled.Share, "Share") { onClose(); onShare(song) }
-                SongOptionRow(MaterialSymbols.RoundedFilled.Person, if (jamActive) "View Jam" else "Start a Jam") {
+                SongOptionRow(MaterialSymbols.RoundedFilled.Person,
+                    if (jamActive) "Jam already in progress" else "Start a Jam", enabled = !jamActive) {
                     onJam()
                 }
                 SongOptionRow(MaterialSymbols.RoundedFilled.Playlist_add, "Add to playlist") {
@@ -1475,16 +1555,16 @@ private fun SongOptionsSheet(
 
 @Composable
 internal fun SongOptionRow(icon: ImageVector, label: String,
-    iconTint: Color = playerSecondary, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().clickable(
+    iconTint: Color = playerSecondary, enabled: Boolean = true, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable(enabled = enabled,
             interactionSource = remember { MutableInteractionSource() }, indication = null,
             role = Role.Button, onClick = onClick,
         )
         .padding(horizontal = 26.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically) {
-        Icon(icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(22.dp))
+        Icon(icon, contentDescription = null, tint = iconTint.copy(alpha = if (enabled) 1f else 0.35f), modifier = Modifier.size(22.dp))
         Spacer(Modifier.width(18.dp))
-        Text(label, color = playerWhite, fontSize = 16.sp, fontWeight = FontWeight.Normal,
+        Text(label, color = playerWhite.copy(alpha = if (enabled) 1f else 0.35f), fontSize = 16.sp, fontWeight = FontWeight.Normal,
             maxLines = 1, softWrap = false, overflow = TextOverflow.Clip,
             modifier = Modifier.weight(1f).basicMarquee(iterations = Int.MAX_VALUE))
     }

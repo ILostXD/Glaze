@@ -83,6 +83,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
@@ -134,6 +135,7 @@ internal fun ReferenceHomeScreen(
     onFavorite: (Playlist, Boolean) -> Unit,
     onSettings: () -> Unit,
     onCustomize: () -> Unit,
+    profileAvatar: ImageBitmap? = null,
 ) {
     val colors = MaterialTheme.colorScheme
     val ink = colors.onBackground
@@ -152,6 +154,7 @@ internal fun ReferenceHomeScreen(
             contentPadding = PaddingValues(top = 20.dp, bottom = bottomPadding),
         ) {
             item("toolbar") { AppToolbar(null, client.credentials.username, darkMode, onSettings,
+                profileAvatar = profileAvatar,
                 onScrollTop = { scope.launch { listState.animateScrollToItem(0) } }) }
             if (error != null) item("error") { HomeNotice(error) }
             sections.forEach { section -> when (section) {
@@ -249,6 +252,7 @@ internal fun ReferenceHomeScreen(
 @Composable
 internal fun AppToolbar(title: String?, username: String, darkMode: Boolean,
                         onSettings: (() -> Unit)?, onBack: (() -> Unit)? = null,
+                        profileAvatar: ImageBitmap? = null,
                         onScrollTop: () -> Unit) {
     val ink = MaterialTheme.colorScheme.onBackground
     val avatar: @Composable () -> Unit = {
@@ -258,7 +262,8 @@ internal fun AppToolbar(title: String?, username: String, darkMode: Boolean,
             .semantics { contentDescription = "Open settings" }
             .then(if (onSettings != null) Modifier.clickable(onClick = onSettings) else Modifier),
             contentAlignment = Alignment.Center) {
-            Text(username.take(2).uppercase(), color = if (darkMode) Color.Black else Color.White,
+            if (profileAvatar != null) Image(profileAvatar, "Profile picture", Modifier.fillMaxSize())
+            else Text(username.take(2).uppercase(), color = if (darkMode) Color.Black else Color.White,
                 style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
         }
     }

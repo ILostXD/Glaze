@@ -9,7 +9,7 @@ internal actual fun platformHttpClient(): HttpClient = HttpClient(OkHttp) {
     expectSuccess = true
 }
 
-internal actual fun saltedToken(password: String): Pair<String, String> {
+actual fun saltedToken(password: String): Pair<String, String> {
     val salt = ByteArray(12).also(SecureRandom()::nextBytes)
         .joinToString("") { "%02x".format(it) }
     val hash = MessageDigest.getInstance("MD5")

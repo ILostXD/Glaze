@@ -52,6 +52,11 @@ internal class CredentialStore @Inject constructor(@ApplicationContext context: 
 
     fun clearJam() { preferences.edit().remove("jam").apply() }
 
+    fun loadJamAvatar(): String = try { loadJson("jam_avatar")?.optString("image").orEmpty() }
+        catch (_: Exception) { "" }
+
+    fun saveJamAvatar(image: String) = saveJson("jam_avatar", JSONObject().put("image", image))
+
     private fun loadJson(entry: String): JSONObject? {
         val saved = preferences.getString(entry, null) ?: return null
         val bytes = Base64.decode(saved, Base64.NO_WRAP)
