@@ -211,6 +211,8 @@ internal fun ReferencePlayerScreen(
     onClearUpcoming: () -> Unit,
     playbackSpeed: Float,
     onChangePlaybackSpeed: (Float) -> Unit,
+    jam: JamViewState,
+    jamActions: JamActions,
 ) {
     val sky = rememberSky()
     val artUrl = remember(client, song.coverArt) { song.coverArt?.let { client.coverArtUrl(it, 1024) } }
@@ -219,6 +221,7 @@ internal fun ReferencePlayerScreen(
     var view by remember { mutableStateOf(PlayerView.Artwork) }
     var queueOpen by remember { mutableStateOf(false) }
     var optionsOpen by remember { mutableStateOf(false) }
+    var jamOpen by remember { mutableStateOf(false) }
     var optionsView by remember(song.id) { mutableStateOf(SongOptionsView.Actions) }
     var artistsOpen by remember { mutableStateOf(false) }
     var artistRefs by remember(song.id) { mutableStateOf<List<Artist>?>(null) }
@@ -408,11 +411,25 @@ internal fun ReferencePlayerScreen(
                     onViewChange = { optionsView = it },
                     onClose = { optionsOpen = false },
                     onShare = onShareSong,
+                    onJam = { optionsOpen = false; jamOpen = true },
+                    jamActive = jam.sessionId.isNotEmpty(),
                     onViewAlbum = onViewAlbum, onGoToArtists = {
                         optionsOpen = false
                         showSongArtists()
                     },
                     playbackSpeed = playbackSpeed, onChangePlaybackSpeed = onChangePlaybackSpeed)
+            }
+        }
+        if (jamOpen) {
+            ModalBottomSheet(
+                onDismissRequest = { jamOpen = false },
+                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+                modifier = Modifier.fillMaxHeight(if (jam.sessionId.isEmpty()) 0.82f else 0.94f),
+                containerColor = Color(0xFF1F1F1F),
+                contentColor = Color.White,
+                scrimColor = Color.Black.copy(alpha = 0.65f),
+            ) {
+                JamScreen(client, jam, jamActions, 24.dp)
             }
         }
         if (artistsOpen) {
@@ -1272,7 +1289,8 @@ private fun ArtistPickerSheet(
 private fun SongOptionsSheet(
     client: SubsonicClient, song: Song, artUrl: String?, view: SongOptionsView,
     onViewChange: (SongOptionsView) -> Unit,
-    onClose: () -> Unit, onShare: (Song) -> Unit,
+    onClose: () -> Unit, onShare: (Song) -> Unit, onJam: () -> Unit,
+    jamActive: Boolean,
     onViewAlbum: (Song) -> Unit, onGoToArtists: () -> Unit,
     playbackSpeed: Float, onChangePlaybackSpeed: (Float) -> Unit,
 ) {
@@ -1367,6 +1385,9 @@ private fun SongOptionsSheet(
                     .clip(RoundedCornerShape(24.dp))
                     .background(Color.White.copy(alpha = 0.09f))) {
                 SongOptionRow(MaterialSymbols.RoundedFilled.Share, "Share") { onClose(); onShare(song) }
+                SongOptionRow(MaterialSymbols.RoundedFilled.Person, if (jamActive) "View Jam" else "Start a Jam") {
+                    onJam()
+                }
                 SongOptionRow(MaterialSymbols.RoundedFilled.Playlist_add, "Add to playlist") {
                     onViewChange(SongOptionsView.Playlists)
                 }
@@ -1492,7 +1513,7 @@ internal fun PlayerSheetSurface(artUrl: String?, modifier: Modifier, content: @C
 }
 
 @Composable
-private fun CoverArt(client: SubsonicClient, song: Song, modifier: Modifier = Modifier) {
+internal fun CoverArt(client: SubsonicClient, song: Song, modifier: Modifier = Modifier) {
     val artUrl = remember(client, song.coverArt) { song.coverArt?.let { client.coverArtUrl(it, 768) } }
     if (artUrl == null) {
         Box(modifier.background(Color.White.copy(alpha = 0.12f)), contentAlignment = Alignment.Center) {

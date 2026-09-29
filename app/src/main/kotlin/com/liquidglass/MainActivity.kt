@@ -27,6 +27,9 @@ import androidx.media3.session.SessionToken
 import androidx.palette.graphics.Palette
 import com.google.common.util.concurrent.ListenableFuture
 import com.liquidglass.shared.MusicApp
+import com.liquidglass.shared.JamActions
+import com.liquidglass.shared.JamPlayback
+import com.liquidglass.shared.JamViewState
 import com.liquidglass.shared.AppSettings
 import com.liquidglass.shared.ServerCredentials
 import com.liquidglass.shared.Song
@@ -36,8 +39,16 @@ import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import androidx.lifecycle.lifecycleScope
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+import org.json.JSONObject
 import java.net.URL
+import kotlin.math.abs
 import javax.inject.Inject
 
 internal fun shouldShowBuffering(playWhenReady: Boolean, itemCount: Int, state: Int): Boolean =
@@ -66,10 +77,35 @@ class MainActivity : ComponentActivity() {
     private var controllerFuture: ListenableFuture<MediaController>? = null
     private var controller: MediaController? = null
     private var pendingPlay: Triple<Song, List<Song>, Boolean>? = null
+    private val jam = mutableStateOf(JamViewState())
+    private var jamSaved: JamSaved? = null
+    private var jamRelay: JamRelay? = null
+    private var jamSocket: WebSocket? = null
+    private var jamHeartbeat: Job? = null
+    private var jamReconnect: Job? = null
+    private var jamApply: Job? = null
+    private var jamGeneration = 0
+    private var jamRevision = -1L
+    private var jamClockOffsetMs = 0L
+    private var jamApplyingUntil = 0L
+    private var jamAwaitingNext = false
+    private var jamAdvancing = false
+    private var jamLoadingTrack: String? = null
+    private var lastPublished: Triple<String, Boolean, Long>? = null
 
     private val listener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
             updatePlayerState(player)
+            if (events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION) ||
+                events.contains(Player.EVENT_PLAY_WHEN_READY_CHANGED) ||
+                events.contains(Player.EVENT_POSITION_DISCONTINUITY) ||
+                events.contains(Player.EVENT_PLAYBACK_STATE_CHANGED)) {
+                if (jam.value.isHost && player.playbackState == Player.STATE_ENDED &&
+                    jam.value.queue.isNotEmpty() && !jamAdvancing) {
+                    jamAdvancing = true
+                    nextJamTrack()
+                } else publishHostPlayback(player)
+            }
         }
     }
 
@@ -124,12 +160,12 @@ class MainActivity : ComponentActivity() {
     private fun sampleArtworkColors(account: ServerCredentials, artworkId: String): Pair<Color, Color> {
         val client = SubsonicClient(account)
         return try {
-            val connection = URL(client.coverArtUrl(artworkId, 256)).openConnection().apply {
+            val connection = URL(client.coverArtUrl(artworkId, 96)).openConnection().apply {
                 connectTimeout = 5_000
                 readTimeout = 5_000
             }
             val bitmap = connection.getInputStream().use { stream ->
-                BitmapFactory.decodeStream(stream, null, BitmapFactory.Options().apply { inSampleSize = 2 })
+                BitmapFactory.decodeStream(stream, null, BitmapFactory.Options().apply { inSampleSize = 4 })
             } ?: return Color.Black to Color.Black
             try {
                 val palette = Palette.from(bitmap).generate()
@@ -138,8 +174,7 @@ class MainActivity : ComponentActivity() {
                     ?: palette.lightMutedSwatch ?: palette.dominantSwatch
                 val accent = swatch?.let { Color(it.rgb) } ?: Color.Black
                 accent to artworkBackdropColor(
-                    palette.dominantSwatch?.let { Color(it.rgb) }, accent,
-                    palette.swatches.map { Color(it.rgb) to it.population })
+                    palette.dominantSwatch?.let { Color(it.rgb) }, accent)
             } finally {
                 bitmap.recycle()
             }
@@ -154,6 +189,12 @@ class MainActivity : ComponentActivity() {
             window.isNavigationBarContrastEnforced = false
         }
         credentials.value = saved.load()
+        jamSaved = saved.loadJam()
+        if (jamSaved == null) jam.value = JamViewState(name = credentials.value?.username.orEmpty())
+        jamSaved?.let { jam.value = JamViewState(url = it.url, name = it.name,
+            hasToken = it.apiToken.isNotEmpty(), sessionId = it.sessionId, inviteToken = it.inviteToken,
+            memberId = it.memberId,
+            connection = if (it.sessionId.isEmpty()) "Disconnected" else "Reconnecting") }
         appSettings.value = settingsStore.load()
         val token = SessionToken(this, ComponentName(this, PlaybackService::class.java))
         controllerFuture = MediaController.Builder(this, token).buildAsync().also { future ->
@@ -167,6 +208,8 @@ class MainActivity : ComponentActivity() {
                 }
             }, ContextCompat.getMainExecutor(this))
         }
+
+        jamSaved?.takeIf { it.sessionId.isNotEmpty() }?.let { resumeJam(it) }
 
         setContent {
             MusicApp(
@@ -184,6 +227,7 @@ class MainActivity : ComponentActivity() {
                     }
                 },
                 onDisconnect = {
+                    leaveJam()
                     controller?.stop()
                     controller?.clearMediaItems()
                     nowPlaying.value = null
@@ -257,13 +301,16 @@ class MainActivity : ComponentActivity() {
                 },
                 onPlay = { song, songs -> play(song, songs) },
                 onTogglePlayback = { controller?.let {
+                    if (jam.value.sessionId.isNotEmpty() && !jam.value.isHost) return@let
                     if (it.isPlaying || shouldShowBuffering(it.playWhenReady,
                             it.mediaItemCount, it.playbackState))
                         it.pause() else it.play()
                 } },
-                onSkipNext = { controller?.seekToNextMediaItem() },
-                onSkipPrevious = { controller?.seekToPreviousMediaItem() },
-                onSeek = { controller?.seekTo(it) },
+                onSkipNext = { if (jam.value.isHost) nextJamTrack()
+                    else if (jam.value.sessionId.isEmpty()) controller?.seekToNextMediaItem() },
+                onSkipPrevious = { if (jam.value.sessionId.isEmpty() || jam.value.isHost)
+                    controller?.seekToPreviousMediaItem() },
+                onSeek = { if (jam.value.sessionId.isEmpty() || jam.value.isHost) controller?.seekTo(it) },
                 onAddNext = ::addNext,
                 onAddToQueue = ::addToQueue,
                 onShareSong = { song ->
@@ -300,6 +347,22 @@ class MainActivity : ComponentActivity() {
                     controller?.play()
                 },
                 onShuffleSongs = ::shuffle,
+                jam = jam.value,
+                jamActions = JamActions(
+                    connect = ::startJam,
+                    leave = ::leaveJam,
+                    add = { trackId -> sendJam(JSONObject().put("type", "queue.add")
+                        .put("track_id", trackId)) },
+                    vote = { itemId, vote -> sendJam(JSONObject().put("type", "queue.vote")
+                        .put("item_id", itemId).put("vote", vote)) },
+                    remove = { itemId -> sendJam(JSONObject().put("type", "queue.remove")
+                        .put("item_id", itemId)) },
+                    next = ::nextJamTrack,
+                    toggle = { if (jam.value.isHost) controller?.let {
+                        if (it.isPlaying) it.pause() else it.play()
+                    } },
+                    share = ::shareJamInvite,
+                ),
             )
         }
     }
@@ -312,9 +375,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun play(song: Song, queue: List<Song>, shuffled: Boolean = false) {
+        if (jam.value.sessionId.isNotEmpty() && !jam.value.isHost) return
         val player = controller ?: run { pendingPlay = Triple(song, queue, shuffled); return }
         val account = credentials.value ?: return
-        val ordered = queue.ifEmpty { listOf(song) }
+        val ordered = if (jam.value.isHost) listOf(song) else queue.ifEmpty { listOf(song) }
         val items = SubsonicClient(account).use { client -> ordered.map { it.toMediaItem(client) } }
         // Start each explicitly selected queue in its requested mode; never inherit a hidden order.
         player.shuffleModeEnabled = false
@@ -355,6 +419,9 @@ class MainActivity : ComponentActivity() {
                 .build()
 
     private fun addNext(song: Song) {
+        if (jam.value.sessionId.isNotEmpty()) {
+            sendJam(JSONObject().put("type", "queue.add").put("track_id", song.id)); return
+        }
         val player = controller ?: return
         val account = credentials.value ?: return
         if (player.mediaItemCount == 0) { play(song, listOf(song)); return }
@@ -363,13 +430,279 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun addToQueue(song: Song) {
+        if (jam.value.sessionId.isNotEmpty()) {
+            sendJam(JSONObject().put("type", "queue.add").put("track_id", song.id)); return
+        }
         val player = controller ?: return
         val account = credentials.value ?: return
         if (player.mediaItemCount == 0) { play(song, listOf(song)); return }
         player.addMediaItem(SubsonicClient(account).use { song.toMediaItem(it) })
     }
 
+    private fun startJam(url: String, token: String, name: String, sessionId: String?) {
+        val base = runCatching { validatedJamUrl(url) }.getOrElse {
+            jam.value = jam.value.copy(error = it.message ?: "Invalid companion address"); return
+        }
+        val actualToken = token.ifBlank { jamSaved?.apiToken.orEmpty() }
+        val invite = sessionId?.let(::parseJamInvite)
+        if (name.trim().isBlank() || (sessionId == null && actualToken.isBlank()) ||
+            (sessionId != null && invite == null)) {
+            jam.value = jam.value.copy(error = "Enter your name and a valid host token or invite code")
+            return
+        }
+        closeJamTransport()
+        val generation = jamGeneration
+        val config = JamSaved(base, if (sessionId == null) actualToken else "", name.trim())
+        jamSaved = config
+        saved.saveJam(config)
+        jam.value = JamViewState(base, config.name, hasToken = config.apiToken.isNotEmpty(), connection = "Connecting")
+        val relay = JamRelay(base, config.apiToken)
+        jamRelay = relay
+        lifecycleScope.launch {
+            runCatching {
+                if (sessionId == null) relay.create(config.name)
+                else relay.join(invite!!.first, invite.second, config.name)
+            }.onSuccess { identity ->
+                if (generation != jamGeneration) return@onSuccess
+                val joined = config.copy(sessionId = identity.sessionId,
+                    memberId = identity.memberId, memberToken = identity.memberToken,
+                    inviteToken = identity.inviteToken)
+                jamSaved = joined
+                saved.saveJam(joined)
+                jam.value = jam.value.copy(sessionId = joined.sessionId,
+                    inviteToken = joined.inviteToken, memberId = joined.memberId,
+                    hostId = identity.snapshot.hostId, members = identity.snapshot.members,
+                    queue = identity.snapshot.queue, playback = identity.snapshot.playback,
+                    connection = "Connecting", error = null)
+                openJamSocket(joined, relay, generation)
+            }.onFailure {
+                if (generation == jamGeneration)
+                    jam.value = jam.value.copy(connection = "Disconnected",
+                        error = it.message ?: "Could not reach the companion")
+            }
+        }
+    }
+
+    private fun resumeJam(config: JamSaved) {
+        if (config.memberToken.isEmpty()) return
+        closeJamTransport()
+        val generation = jamGeneration
+        val relay = JamRelay(config.url, config.apiToken)
+        jamRelay = relay
+        openJamSocket(config, relay, generation)
+    }
+
+    private fun openJamSocket(config: JamSaved, relay: JamRelay, generation: Int) {
+        jamSocket = relay.connect(config.sessionId, config.memberToken, object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                runOnUiThread {
+                    if (generation != jamGeneration) return@runOnUiThread
+                    jam.value = jam.value.copy(connection = "Connected", error = null)
+                    jamHeartbeat?.cancel()
+                    jamHeartbeat = lifecycleScope.launch {
+                        while (isActive) {
+                            webSocket.send(JSONObject().put("type", "heartbeat")
+                                .put("nonce", System.currentTimeMillis().toString()).toString())
+                            if (!jam.value.isHost) syncJamPlayback()
+                            delay(5_000)
+                        }
+                    }
+                }
+            }
+
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                runOnUiThread {
+                    if (generation == jamGeneration) handleJamMessage(text)
+                }
+            }
+
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) =
+                scheduleJamReconnect(generation)
+
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                runOnUiThread {
+                    if (generation == jamGeneration) jam.value = jam.value.copy(
+                        connection = "Reconnecting",
+                        error = response?.let { "Relay returned HTTP ${it.code}" } ?: "Relay connection lost")
+                }
+                scheduleJamReconnect(generation)
+            }
+        })
+    }
+
+    private fun scheduleJamReconnect(generation: Int) {
+        runOnUiThread {
+            if (generation != jamGeneration || jamSaved?.sessionId.isNullOrEmpty()) return@runOnUiThread
+            jamHeartbeat?.cancel()
+            jam.value = jam.value.copy(connection = "Reconnecting")
+            if (jamReconnect?.isActive == true) return@runOnUiThread
+            jamReconnect = lifecycleScope.launch {
+                delay(3_000)
+                val config = jamSaved ?: return@launch
+                val relay = jamRelay ?: return@launch
+                if (generation == jamGeneration) openJamSocket(config, relay, generation)
+            }
+        }
+    }
+
+    private fun handleJamMessage(text: String) {
+        try {
+            val event = JSONObject(text)
+            when (event.getString("type")) {
+                "connected", "state" -> {
+                    val snapshot = parseJamSnapshot(event.getJSONObject("session"))
+                    if (snapshot.revision < jamRevision) return
+                    if (jamRevision < 0) jamClockOffsetMs =
+                        snapshot.playback.serverTimeMs - System.currentTimeMillis()
+                    jamRevision = snapshot.revision
+                    val wasConnected = jam.value.hostId.isNotEmpty()
+                    jam.value = jam.value.copy(hostId = snapshot.hostId,
+                        members = snapshot.members, queue = snapshot.queue,
+                        playback = snapshot.playback, connection = "Connected", error = null)
+                    if (jam.value.isHost) {
+                        if (jamAwaitingNext || (!wasConnected && snapshot.playback.trackId.isNotEmpty())) {
+                            jamAwaitingNext = false
+                            jamAdvancing = false
+                            syncJamPlayback(forceHost = true)
+                        } else if (snapshot.playback.trackId.isEmpty() && nowPlaying.value != null)
+                            controller?.let(::publishHostPlayback)
+                    } else syncJamPlayback()
+                }
+                "heartbeat" -> {
+                    val sent = event.optString("nonce").toLongOrNull()
+                    if (sent != null) jamClockOffsetMs = event.getLong("server_time_ms") -
+                        (sent + System.currentTimeMillis()) / 2
+                }
+                "error" -> {
+                    jamAdvancing = false
+                    jamAwaitingNext = false
+                    jam.value = jam.value.copy(error = "Jam action failed: ${event.optString("error")}")
+                }
+                "session_ended" -> clearJamSession()
+            }
+        } catch (_: Exception) { jam.value = jam.value.copy(error = "Invalid relay response") }
+    }
+
+    private fun publishHostPlayback(player: Player) {
+        if (!jam.value.isHost || jam.value.connection != "Connected" ||
+            jamAwaitingNext || System.currentTimeMillis() < jamApplyingUntil) return
+        val track = player.currentMediaItem?.mediaId.orEmpty()
+        val playing = track.isNotEmpty() && player.playWhenReady && player.playbackState != Player.STATE_ENDED
+        val position = if (track.isEmpty()) 0L else player.currentPosition.coerceAtLeast(0L)
+        val previous = lastPublished
+        if (previous?.first == track && previous.second == playing &&
+            abs(previous.third - position) < 700) return
+        lastPublished = Triple(track, playing, position)
+        sendJam(JSONObject().put("type", "playback.set").put("track_id", track)
+            .put("playing", playing).put("position_ms", position))
+    }
+
+    private fun syncJamPlayback(forceHost: Boolean = false) {
+        if (jam.value.isHost && !forceHost) return
+        val target = jam.value.playback ?: return
+        val player = controller ?: return
+        if (target.trackId.isEmpty()) {
+            if (player.currentMediaItem != null) {
+                jamApplyingUntil = System.currentTimeMillis() + 1_500
+                player.stop()
+                player.clearMediaItems()
+            }
+            return
+        }
+        if (player.currentMediaItem?.mediaId != target.trackId) {
+            if (jamLoadingTrack == target.trackId) return
+            jamApply?.cancel()
+            jamLoadingTrack = target.trackId
+            jamApply = lifecycleScope.launch {
+                try {
+                    val account = credentials.value ?: return@launch
+                    val song = runCatching { SubsonicClient(account).use { it.songById(target.trackId) } }
+                        .getOrNull()
+                    if (jam.value.playback?.trackId != target.trackId) return@launch
+                    if (song == null) {
+                        jam.value = jam.value.copy(error = "Song unavailable in this Navidrome library")
+                        return@launch
+                    }
+                    jamApplyingUntil = System.currentTimeMillis() + 1_500
+                    val item = SubsonicClient(account).use { song.toMediaItem(it) }
+                    player.setMediaItem(item)
+                    player.prepare()
+                    player.seekTo(target.targetPosition(System.currentTimeMillis() + jamClockOffsetMs))
+                    if (target.playing) player.play() else player.pause()
+                } finally {
+                    jamLoadingTrack = null
+                }
+            }
+            return
+        }
+        val desired = target.targetPosition(System.currentTimeMillis() + jamClockOffsetMs)
+        if (abs(player.currentPosition - desired) > 1_200) {
+            jamApplyingUntil = System.currentTimeMillis() + 1_500
+            player.seekTo(desired)
+        }
+        if (player.playWhenReady != target.playing) {
+            jamApplyingUntil = System.currentTimeMillis() + 1_500
+            if (target.playing) player.play() else player.pause()
+        }
+    }
+
+    private fun sendJam(command: JSONObject): Boolean {
+        if (jam.value.connection == "Connected" && jamSocket?.send(command.toString()) == true) return true
+        jam.value = jam.value.copy(error = "Jam is not connected yet")
+        return false
+    }
+
+    private fun nextJamTrack() {
+        if (!jam.value.isHost || jamAwaitingNext) return
+        jamAwaitingNext = sendJam(JSONObject().put("type", "playback.next"))
+        if (!jamAwaitingNext) jamAdvancing = false
+    }
+
+    private fun leaveJam() {
+        val config = jamSaved ?: return
+        if (config.sessionId.isNotEmpty()) lifecycleScope.launch {
+            runCatching { JamRelay(config.url, config.apiToken).use {
+                it.leave(config.sessionId, config.memberToken) } }
+        }
+        clearJamSession()
+    }
+
+    private fun shareJamInvite() {
+        val config = jamSaved ?: return
+        if (config.inviteToken.isEmpty() || config.sessionId.isEmpty()) return
+        val text = "Join my Glaze Jam\nServer: ${config.url}\nInvite code: ${config.sessionId}:${config.inviteToken}"
+        startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, text)
+        }, "Share Jam invite"))
+    }
+
+    private fun clearJamSession() {
+        closeJamTransport()
+        saved.clearJamSession()
+        jamSaved = saved.loadJam()
+        jam.value = JamViewState(url = jamSaved?.url.orEmpty(), name = jamSaved?.name.orEmpty(),
+            hasToken = !jamSaved?.apiToken.isNullOrEmpty())
+    }
+
+    private fun closeJamTransport() {
+        jamGeneration++
+        jamHeartbeat?.cancel()
+        jamReconnect?.cancel()
+        jamApply?.cancel()
+        jamSocket?.close(1000, null)
+        jamSocket = null
+        jamRelay?.close()
+        jamRelay = null
+        jamRevision = -1L
+        jamAwaitingNext = false
+        jamAdvancing = false
+        jamLoadingTrack = null
+        lastPublished = null
+    }
+
     override fun onDestroy() {
+        closeJamTransport()
         controller?.removeListener(listener)
         controller = null
         controllerFuture?.let(MediaController::releaseFuture)

@@ -33,6 +33,7 @@ Glaze is an Android music player for [Navidrome](https://www.navidrome.org/) and
 - Play in the background with Android media controls; manage the queue, shuffle, and view lyrics when available.
 - Explore artwork-led album and artist pages, favorite music, and edit playlist order.
 - Choose light or dark mode and tune the mini-player, navigation, glass intensity, and gestures in Settings.
+- Start a Jam from Now Playing’s song actions to share a queue with friends on the same Navidrome library.
 
 ## Get started
 
@@ -41,6 +42,8 @@ Glaze is an Android music player for [Navidrome](https://www.navidrome.org/) and
 3. Start browsing your library. Use an **HTTPS** server URL when connecting over the internet; plain HTTP should only be used on a network you trust.
 
 Glaze checks the connection before saving your account. Credentials are stored using Android Keystore-backed encryption, and Subsonic requests use salted token authentication. The app does not provide a music catalog or host your files.
+
+Jam needs a separate [Glaze Companion](https://github.com/ILostXD/GlazeCompanion) server over HTTPS. The host enters its companion admin token once; guests need only the server address and the invite code shared from the Jam sheet. Guest playback uses each phone’s own Navidrome connection, so everyone needs access to the same library. Invites, queue voting and host-controlled playback are supported; nearby discovery and QR invites are not yet implemented.
 
 ## Build from source
 

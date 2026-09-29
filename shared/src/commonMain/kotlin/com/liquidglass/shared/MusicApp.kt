@@ -305,6 +305,8 @@ fun MusicApp(
     onClearUpcoming: () -> Unit,
     playbackSpeed: Float,
     onChangePlaybackSpeed: (Float) -> Unit,
+    jam: JamViewState,
+    jamActions: JamActions,
 ) {
     val systemDark = isSystemInDarkTheme()
     val darkMode = when (settings.themePreference) {
@@ -397,7 +399,8 @@ fun MusicApp(
                     onToggleShuffle = onToggleShuffle, onCycleRepeat = onCycleRepeat,
                     onClearUpcoming = onClearUpcoming,
                     playbackSpeed = playbackSpeed,
-                    onChangePlaybackSpeed = onChangePlaybackSpeed)
+                    onChangePlaybackSpeed = onChangePlaybackSpeed,
+                    jam = jam, jamActions = jamActions)
             }
         }
         }
@@ -497,6 +500,8 @@ private fun LibraryScreen(
     onClearUpcoming: () -> Unit,
     playbackSpeed: Float,
     onChangePlaybackSpeed: (Float) -> Unit,
+    jam: JamViewState,
+    jamActions: JamActions,
 ) {
     var tab by remember { mutableStateOf(Tab.Home) }
     var detail by remember { mutableStateOf<Detail?>(null) }
@@ -999,6 +1004,8 @@ private fun LibraryScreen(
                 onClearUpcoming = onClearUpcoming,
                 playbackSpeed = playbackSpeed,
                 onChangePlaybackSpeed = onChangePlaybackSpeed,
+                jam = jam,
+                jamActions = jamActions,
             )
         }
     }
