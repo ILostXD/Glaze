@@ -101,7 +101,7 @@ internal class JamRelay(private val url: String, private val apiToken: String) :
     }
 
     fun connect(sessionId: String, memberToken: String, listener: WebSocketListener): WebSocket {
-        val path = "/api/v1/jam/ws?session_id=${URLEncoder.encode(sessionId, "UTF-8")}" 
+        val path = "/api/v1/jam/ws?session_id=${URLEncoder.encode(sessionId, "UTF-8")}"
         val request = Request.Builder().url(url + path)
             .header("X-Jam-Member-Token", memberToken).build()
         return http.newWebSocket(request, listener)
