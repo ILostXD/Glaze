@@ -50,6 +50,8 @@ internal class CredentialStore @Inject constructor(@ApplicationContext context: 
         loadJam()?.let { saveJam(it.copy(sessionId = "", memberId = "", memberToken = "", inviteToken = "")) }
     }
 
+    fun clearJam() { preferences.edit().remove("jam").apply() }
+
     private fun loadJson(entry: String): JSONObject? {
         val saved = preferences.getString(entry, null) ?: return null
         val bytes = Base64.decode(saved, Base64.NO_WRAP)

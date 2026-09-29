@@ -228,6 +228,9 @@ class MainActivity : ComponentActivity() {
                 },
                 onDisconnect = {
                     leaveJam()
+                    saved.clearJam()
+                    jamSaved = null
+                    jam.value = JamViewState()
                     controller?.stop()
                     controller?.clearMediaItems()
                     nowPlaying.value = null
