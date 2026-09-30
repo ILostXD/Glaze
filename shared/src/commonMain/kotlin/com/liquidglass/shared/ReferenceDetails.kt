@@ -153,7 +153,7 @@ internal fun ArtistReferenceScreen(
                             0.55f to Color.Transparent,
                             1f to Color.Transparent,
                         )))
-                        Column(Modifier.align(Alignment.BottomCenter).padding(bottom = 3.dp),
+                        Column(Modifier.align(Alignment.BottomCenter).padding(bottom = 11.dp),
                             horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(
                                 artist.name,
@@ -615,7 +615,7 @@ private fun DetailGlassIcon(
     collapse: Float,
     onClick: () -> Unit,
 ) {
-    Box(Modifier.size(52.dp), contentAlignment = Alignment.Center) {
+    Box(Modifier.size(52.dp).clip(CircleShape), contentAlignment = Alignment.Center) {
         Box(Modifier.fillMaxSize().graphicsLayer { alpha = 1f - collapse }
             .cloudy(sky = sky, radius = 12,
                 tint = Color.Black.copy(alpha = if (darkMode) 0.12f else 0.20f), shape = CircleShape)

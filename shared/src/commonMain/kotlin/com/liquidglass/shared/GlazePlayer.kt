@@ -165,18 +165,14 @@ private val playerSecondary = Color.White.copy(alpha = 0.68f)
 
 @Composable
 internal fun ExplicitBadge(color: Color, modifier: Modifier = Modifier, titleSized: Boolean = false) {
-    if (titleSized) {
-        Box(modifier.size(22.dp).semantics { contentDescription = "Explicit" }
-            .border(1.dp, color.copy(alpha = 0.75f), RoundedCornerShape(3.dp)),
-            contentAlignment = Alignment.Center) {
-            Text("E", color = color, fontSize = 18.sp, lineHeight = 20.sp, fontWeight = FontWeight.Bold)
-        }
-    } else {
-        Text("E", color = color, fontSize = 10.sp, lineHeight = 12.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = modifier.semantics { contentDescription = "Explicit" }
-                .border(1.dp, color.copy(alpha = 0.75f), RoundedCornerShape(3.dp))
-                .padding(horizontal = 3.dp))
+    Box(modifier.size(if (titleSized) 17.dp else 14.dp)
+        .clip(RoundedCornerShape(2.dp)).background(color)
+        .semantics { contentDescription = "Explicit" },
+        contentAlignment = Alignment.Center) {
+        Text("E", color = MaterialTheme.colorScheme.background,
+            fontSize = if (titleSized) 12.sp else 10.sp,
+            lineHeight = if (titleSized) 14.sp else 12.sp,
+            fontWeight = FontWeight.Bold)
     }
 }
 
@@ -568,21 +564,21 @@ private fun SongHeading(
     Column {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f).padding(end = 10.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(song.title, color = playerWhite, fontSize = 23.sp, lineHeight = 28.sp,
-                    fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false,
-                    overflow = TextOverflow.Clip, modifier = Modifier.weight(1f, fill = false).basicMarquee(iterations = Int.MAX_VALUE))
+            Text(song.title, color = playerWhite, fontSize = 23.sp, lineHeight = 28.sp,
+                fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false,
+                overflow = TextOverflow.Clip, modifier = Modifier.fillMaxWidth().basicMarquee(iterations = Int.MAX_VALUE))
+            Row(Modifier.fillMaxWidth().clickable(enabled = song.artist.isNotBlank(),
+                interactionSource = remember { MutableInteractionSource() }, indication = null,
+                role = Role.Button) { onShowArtists() }, verticalAlignment = Alignment.CenterVertically) {
                 if (song.isExplicit) {
-                    Spacer(Modifier.width(10.dp))
                     ExplicitBadge(playerSecondary, titleSized = true)
+                    Spacer(Modifier.width(6.dp))
                 }
+                Text(song.artist, color = playerSecondary, fontSize = 17.sp, lineHeight = 23.sp,
+                    fontWeight = FontWeight.Normal, maxLines = 1, softWrap = false,
+                    overflow = TextOverflow.Clip,
+                    modifier = Modifier.weight(1f).basicMarquee(iterations = Int.MAX_VALUE))
             }
-            Text(song.artist, color = playerSecondary, fontSize = 17.sp, lineHeight = 23.sp,
-                fontWeight = FontWeight.Normal, maxLines = 1, softWrap = false,
-                overflow = TextOverflow.Clip, modifier = Modifier.fillMaxWidth().basicMarquee(iterations = Int.MAX_VALUE)
-                    .clickable(enabled = song.artist.isNotBlank(),
-                        interactionSource = remember { MutableInteractionSource() }, indication = null,
-                        role = Role.Button) { onShowArtists() })
             if (song.album.isNotBlank()) Text(song.album, color = playerSecondary.copy(alpha = 0.8f),
                 fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Normal,
                 maxLines = 1, softWrap = false,
