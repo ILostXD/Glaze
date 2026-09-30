@@ -780,7 +780,7 @@ private fun AlbumFooter(songCount: Int, durationSeconds: Long, releaseDate: Stri
 }
 
 @Composable
-private fun CollectionControls(
+internal fun CollectionControls(
     darkMode: Boolean, onShuffle: () -> Unit, onPlay: () -> Unit,
     favorite: Boolean? = null, onFavorite: (() -> Unit)? = null,
     favoriteEnabled: Boolean = true, favoriteLabel: String = "album",

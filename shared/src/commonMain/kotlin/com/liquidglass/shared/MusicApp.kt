@@ -1035,6 +1035,7 @@ private fun LibraryScreen(
                 jamActions = jamActions,
                 onJam = { jamOpen = true },
                 openQueueForJam = jamQueueRequest,
+                onQueueForJamOpened = { jamQueueRequest = 0 },
                 onJamInvite = { jamGuestControls = false; jamOpen = true },
                 onJamSettings = { jamGuestControls = true; jamOpen = true },
             )

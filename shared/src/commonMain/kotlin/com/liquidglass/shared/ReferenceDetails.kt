@@ -1,14 +1,10 @@
 package com.liquidglass.shared
 
 import com.composables.icons.materialsymbols.MaterialSymbols
-import com.composables.icons.materialsymbols.rounded.Favorite as FavoriteOutline
 import com.composables.icons.materialsymbols.roundedfilled.Arrow_back
 import com.composables.icons.materialsymbols.roundedfilled.Arrow_forward
-import com.composables.icons.materialsymbols.roundedfilled.Favorite
 import com.composables.icons.materialsymbols.roundedfilled.More_vert
-import com.composables.icons.materialsymbols.roundedfilled.Play_arrow
 import com.composables.icons.materialsymbols.roundedfilled.Share
-import com.composables.icons.materialsymbols.roundedfilled.Shuffle
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
@@ -174,14 +170,14 @@ internal fun ArtistReferenceScreen(
                                 maxLines = 2,
                                 overflow = TextOverflow.Ellipsis,
                             )
-                            Spacer(Modifier.height(18.dp))
-                            Row(horizontalArrangement = Arrangement.Center) {
-                                RoundAction(if (favorite) MaterialSymbols.RoundedFilled.Favorite
-                                    else MaterialSymbols.Rounded.FavoriteOutline,
-                                    if (favorite) "Unfavorite ${artist.name}" else "Favorite ${artist.name}", darkMode,
-                                    tint = if (favorite) favoriteRed else ink.copy(alpha = 0.60f),
-                                    enabled = !favoritePending) {
-                                    if (favoritePending) return@RoundAction
+                            CollectionControls(
+                                darkMode = darkMode,
+                                onShuffle = onShuffle,
+                                onPlay = onPlayAll,
+                                favorite = favorite,
+                                favoriteEnabled = !favoritePending,
+                                favoriteLabel = artist.name,
+                                onFavorite = {
                                     val next = !favorite
                                     favorite = next
                                     favoritePending = true
@@ -194,14 +190,8 @@ internal fun ArtistReferenceScreen(
                                             favoriteError = "Could not update favorite. Try again."
                                         } finally { favoritePending = false }
                                     }
-                                }
-                                Spacer(Modifier.width(17.dp))
-                                RoundAction(MaterialSymbols.RoundedFilled.Play_arrow,
-                                    "Play ${artist.name}", darkMode, onClick = onPlayAll)
-                                Spacer(Modifier.width(17.dp))
-                                RoundAction(MaterialSymbols.RoundedFilled.Shuffle,
-                                    "Shuffle ${artist.name}", darkMode, onClick = onShuffle)
-                            }
+                                },
+                            )
                             favoriteError?.let { message ->
                                 Text(message, modifier = Modifier.padding(top = 8.dp, start = 24.dp, end = 24.dp),
                                     color = Color.White, style = MaterialTheme.typography.bodySmall,
@@ -576,30 +566,6 @@ private fun DetailArtwork(client: SubsonicClient, id: String?, modifier: Modifie
 }
 
 @Composable
-private fun RoundAction(
-    image: androidx.compose.ui.graphics.vector.ImageVector,
-    description: String,
-    darkMode: Boolean,
-    tint: Color? = null,
-    enabled: Boolean = true,
-    onClick: () -> Unit,
-) {
-    val shape = CircleShape
-    IconButton(
-        onClick = onClick,
-        enabled = enabled,
-        modifier = Modifier.size(64.dp).graphicsLayer { alpha = if (enabled) 1f else 0.5f }.clip(shape)
-            .background(if (darkMode) Color.White.copy(alpha = 0.12f)
-                else Color.Black.copy(alpha = 0.08f))
-            .border(1.dp, if (darkMode) Color.White.copy(alpha = 0.22f)
-                else Color.Black.copy(alpha = 0.13f), shape),
-    ) {
-        Icon(image, contentDescription = description,
-            tint = tint ?: MaterialTheme.colorScheme.onBackground, modifier = Modifier.size(29.dp))
-    }
-}
-
-@Composable
 private fun DetailHeading(text: String, modifier: Modifier = Modifier) {
     Text(text, modifier = modifier.padding(horizontal = 24.dp),
         color = MaterialTheme.colorScheme.onBackground,
@@ -649,10 +615,11 @@ private fun DetailGlassIcon(
 ) {
     Box(Modifier.size(52.dp), contentAlignment = Alignment.Center) {
         Box(Modifier.fillMaxSize().graphicsLayer { alpha = 1f - collapse }
-            .cloudy(sky = sky, radius = 42,
-                tint = if (darkMode) Color.Black.copy(alpha = 0.22f)
-                else Color.Black.copy(alpha = 0.42f), shape = CircleShape)
-            .border(1.dp, Color.White.copy(alpha = 0.27f), CircleShape))
+            .cloudy(sky = sky, radius = 12,
+                tint = Color.Black.copy(alpha = if (darkMode) 0.12f else 0.20f), shape = CircleShape)
+            .background(Color.White.copy(alpha = 0.08f))
+            .border(1.dp, Brush.verticalGradient(listOf(
+                Color.White.copy(alpha = 0.40f), Color.White.copy(alpha = 0.08f))), CircleShape))
         IconButton(onClick = onClick, modifier = Modifier.fillMaxSize()) {
             Icon(image, contentDescription = description, tint = Color.White)
         }

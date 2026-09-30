@@ -218,6 +218,7 @@ internal fun ReferencePlayerScreen(
     jamActions: JamActions,
     onJam: () -> Unit,
     openQueueForJam: Int,
+    onQueueForJamOpened: () -> Unit,
     onJamInvite: () -> Unit,
     onJamSettings: () -> Unit,
 ) {
@@ -227,7 +228,12 @@ internal fun ReferencePlayerScreen(
     val glassTint = Color.White.copy(alpha = 0.05f + 0.12f * settings.glassIntensity.coerceIn(0f, 1f))
     var view by remember { mutableStateOf(PlayerView.Artwork) }
     var queueOpen by remember { mutableStateOf(false) }
-    LaunchedEffect(openQueueForJam) { if (openQueueForJam > 0) queueOpen = true }
+    LaunchedEffect(openQueueForJam) {
+        if (openQueueForJam > 0) {
+            queueOpen = true
+            onQueueForJamOpened()
+        }
+    }
     var optionsOpen by remember { mutableStateOf(false) }
     var optionsView by remember(song.id) { mutableStateOf(SongOptionsView.Actions) }
     var artistsOpen by remember { mutableStateOf(false) }
@@ -1052,7 +1058,7 @@ private fun QueueContents(
             Text("${hostName}’s Jam", color = playerWhite, fontSize = 23.sp,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.padding(start = 22.dp, end = 22.dp, top = 12.dp, bottom = 14.dp))
-            Row(Modifier.fillMaxWidth().padding(start = 22.dp, end = 22.dp, bottom = 20.dp),
+            Row(Modifier.fillMaxWidth().padding(start = 22.dp, end = 22.dp, bottom = 12.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 val self = jam.members.firstOrNull { it.id == jam.memberId }
                     ?: JamMember(jam.memberId, jam.name.ifBlank { "You" })
@@ -1092,7 +1098,7 @@ private fun QueueContents(
             Box(Modifier.fillMaxWidth().padding(horizontal = 22.dp).height(1.dp)
                 .background(Color.White.copy(alpha = 0.22f)))
         }
-        Row(Modifier.fillMaxWidth().padding(start = 22.dp, end = 22.dp, top = 10.dp, bottom = 12.dp),
+        Row(Modifier.fillMaxWidth().padding(start = 22.dp, end = 22.dp, top = 12.dp, bottom = 12.dp),
             horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text("${remaining.size} ${if (remaining.size == 1) "song" else "songs"} • ${formatQueueDuration(duration)}", color = playerWhite,
                 fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
@@ -1329,7 +1335,8 @@ private fun GlassIconButton(
 ) {
     Box(
         Modifier.size(buttonSize).graphicsLayer { alpha = if (enabled) 1f else 0.5f }.clip(CircleShape)
-            .cloudy(sky = sky, radius = 24, tint = tint, shape = CircleShape)
+            .cloudy(sky = sky, radius = 12, tint = tint, shape = CircleShape)
+            .background(Color.White.copy(alpha = 0.08f))
             .border(1.dp, Brush.verticalGradient(listOf(
                 Color.White.copy(alpha = 0.38f), Color.White.copy(alpha = 0.07f),
             )), CircleShape)
@@ -1347,7 +1354,8 @@ private fun QueueGlassPill(
     danger: Boolean = false, onClick: () -> Unit,
 ) {
     Box(modifier.height(42.dp).clip(CircleShape)
-        .cloudy(sky = sky, radius = 24, tint = Color.White.copy(alpha = 0.15f), shape = CircleShape)
+        .cloudy(sky = sky, radius = 12, tint = Color.White.copy(alpha = 0.08f), shape = CircleShape)
+        .background(Color.White.copy(alpha = 0.08f))
         .border(1.dp, Brush.verticalGradient(listOf(
             Color.White.copy(alpha = 0.34f), Color.White.copy(alpha = 0.07f))), CircleShape)
         .clickable(role = Role.Button, onClick = onClick)
