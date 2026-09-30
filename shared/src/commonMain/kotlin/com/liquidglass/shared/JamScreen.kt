@@ -74,7 +74,7 @@ private val jamGlass = Color.White.copy(alpha = 0.09f)
 @Composable
 internal fun JamScreen(
     client: SubsonicClient, state: JamViewState, actions: JamActions,
-    nowPlaying: Song?, showGuestControls: Boolean, onClose: () -> Unit,
+    nowPlaying: Song?, showGuestControls: Boolean,
 ) {
     val active = state.sessionId.isNotEmpty()
     val connecting = state.connection == "Connecting"
@@ -97,19 +97,15 @@ internal fun JamScreen(
         Column(Modifier.heightIn(max = 620.dp)
             .fillMaxWidth().navigationBarsPadding().padding(bottom = 16.dp)) {
             SheetHandle()
-            Row(Modifier.fillMaxWidth().padding(start = 22.dp, end = 14.dp, top = 10.dp, bottom = 16.dp),
-                verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(when (page) {
-                        JamPage.Welcome -> "Listen together"
-                        JamPage.Join -> "Join a Jam"
-                        JamPage.Invite -> "Invite friends"
-                        JamPage.GuestControls -> "Guest controls"
-                    }, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.SemiBold,
-                        maxLines = 2, overflow = TextOverflow.Ellipsis)
-                }
-                JamIcon(MaterialSymbols.RoundedFilled.Close, "Close Jam", onClick = onClose)
-            }
+            Text(when (page) {
+                JamPage.Welcome -> "Listen together"
+                JamPage.Join -> "Join a Jam"
+                JamPage.Invite -> "Invite friends"
+                JamPage.GuestControls -> "Guest controls"
+            }, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.SemiBold,
+                maxLines = 2, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth().padding(start = 22.dp, end = 22.dp,
+                    top = 10.dp, bottom = 16.dp))
             state.error?.let {
                 Text(it, color = Color(0xFFFFB4AB), fontSize = 13.sp,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 8.dp))
@@ -181,15 +177,6 @@ internal fun JamAvatar(member: JamMember, size: Int) {
         .clip(CircleShape).background(Color.White.copy(alpha = 0.13f), CircleShape), contentAlignment = Alignment.Center) {
         if (member.avatar != null) Image(member.avatar, "${member.name}'s picture", Modifier.fillMaxSize())
         else Text(member.name.take(1).uppercase(), color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-    }
-}
-
-@Composable
-private fun JamIcon(icon: ImageVector, label: String, enabled: Boolean = true,
-                    selected: Boolean = false, onClick: () -> Unit) {
-    IconButton(onClick = onClick, enabled = enabled,
-        modifier = Modifier.size(48.dp).clip(CircleShape).background(if (selected) jamGlass else Color.Transparent)) {
-        Icon(icon, label, tint = Color.White.copy(alpha = if (enabled || selected) 0.9f else 0.3f), modifier = Modifier.size(23.dp))
     }
 }
 

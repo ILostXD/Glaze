@@ -1049,8 +1049,7 @@ private fun LibraryScreen(
             dragHandle = null,
             contentWindowInsets = { WindowInsets(0, 0, 0, 0) },
             scrimColor = Color.Black.copy(alpha = 0.28f)) {
-            JamScreen(client, jam, jamActions, nowPlaying, jamGuestControls,
-                onClose = { jamOpen = false })
+            JamScreen(client, jam, jamActions, nowPlaying, jamGuestControls)
         }
     }
     }

@@ -1059,17 +1059,17 @@ private fun QueueContents(
                 val members = listOf(self) + jam.members.filterNot { it.id == jam.memberId }
                 val shown = members.take(3)
                 val hidden = (members.size - shown.size).coerceAtLeast(0)
-                Box(Modifier.width((70 + (shown.size - 1) * 25 + if (hidden > 0) 25 else 0).dp)
+                Box(Modifier.width((72 + (shown.size - 1) * 25 + if (hidden > 0) 25 else 0).dp)
                     .height(42.dp)) {
                     shown.forEachIndexed { index, member ->
                         Box(Modifier.offset(x = (30 + index * 25).dp)
                             .zIndex((shown.size - index).toFloat())
                             .border(2.dp, Color.Black.copy(alpha = 0.8f), CircleShape)) {
-                            JamAvatar(member, 38)
+                            JamAvatar(member, 42)
                         }
                     }
                     if (hidden > 0) Box(Modifier.offset(x = (30 + shown.size * 25).dp)
-                        .size(38.dp).clip(CircleShape)
+                        .size(42.dp).clip(CircleShape)
                         .background(Color.White.copy(alpha = 0.17f))
                         .border(1.dp, Color.White.copy(alpha = 0.26f), CircleShape),
                         contentAlignment = Alignment.Center) {
@@ -1089,15 +1089,15 @@ private fun QueueContents(
                 QueueGlassPill(if (jam.isHost) "End" else "Leave", sky,
                     danger = true) { confirmEnd = true }
             }
+            Box(Modifier.fillMaxWidth().padding(horizontal = 22.dp).height(1.dp)
+                .background(Color.White.copy(alpha = 0.22f)))
         }
         Row(Modifier.fillMaxWidth().padding(start = 22.dp, end = 22.dp, top = 10.dp, bottom = 12.dp),
             horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text("${remaining.size} ${if (remaining.size == 1) "song" else "songs"} • ${formatQueueDuration(duration)}", color = playerWhite,
                 fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-            if (jam == null) Box(Modifier.clip(CircleShape).background(Color.White.copy(alpha = 0.15f))
-                .clickable(onClick = onClearUpcoming).padding(horizontal = 14.dp, vertical = 9.dp)) {
-                Text("Clear queue", color = playerSecondary, fontSize = 14.sp)
-            } else if (jam.isHost) QueueGlassPill("Clear queue", sky) { onClearJam() }
+            if (jam == null) QueueGlassPill("Clear queue", sky, onClick = onClearUpcoming)
+            else if (jam.isHost) QueueGlassPill("Clear queue", sky) { onClearJam() }
         }
         BasicTextField(
             value = query,
