@@ -784,17 +784,19 @@ internal fun CollectionControls(
     darkMode: Boolean, onShuffle: () -> Unit, onPlay: () -> Unit,
     favorite: Boolean? = null, onFavorite: (() -> Unit)? = null,
     favoriteEnabled: Boolean = true, favoriteLabel: String = "album",
+    controlSize: androidx.compose.ui.unit.Dp = 51.dp,
+    playWidth: androidx.compose.ui.unit.Dp = 168.dp,
 ) {
     val ink = MaterialTheme.colorScheme.onBackground
     val quietFill = ink.copy(alpha = if (darkMode) 0.10f else 0.07f)
     Row(Modifier.fillMaxWidth().padding(top = 25.dp, bottom = 22.dp),
         horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(51.dp).clip(CircleShape).background(quietFill)
+        Box(Modifier.size(controlSize).clip(CircleShape).background(quietFill)
             .clickable(onClick = onShuffle), contentAlignment = Alignment.Center) {
             Icon(MaterialSymbols.RoundedFilled.Shuffle, "Shuffle", tint = ink)
         }
         Spacer(Modifier.width(16.dp))
-        Row(Modifier.width(168.dp).height(52.dp).clip(CircleShape)
+        Row(Modifier.width(playWidth).height(controlSize + 1.dp).clip(CircleShape)
             .background(ink).clickable(onClick = onPlay),
             horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
             Icon(MaterialSymbols.RoundedFilled.Play_arrow, null,
@@ -805,14 +807,14 @@ internal fun CollectionControls(
         }
         Spacer(Modifier.width(16.dp))
         if (favorite != null && onFavorite != null) {
-            Box(Modifier.size(51.dp).clip(CircleShape).background(quietFill)
+            Box(Modifier.size(controlSize).clip(CircleShape).background(quietFill)
                 .clickable(enabled = favoriteEnabled, onClick = onFavorite), contentAlignment = Alignment.Center) {
                 Icon(if (favorite) MaterialSymbols.RoundedFilled.Favorite else MaterialSymbols.Rounded.FavoriteOutline,
                     if (favorite) "Unfavorite $favoriteLabel" else "Favorite $favoriteLabel",
                     tint = if (favorite) favoriteRed.copy(alpha = if (favoriteEnabled) 1f else 0.45f)
                         else ink.copy(alpha = if (favoriteEnabled) 0.65f else 0.25f))
             }
-        } else Spacer(Modifier.size(51.dp))
+        } else Spacer(Modifier.size(controlSize))
     }
 }
 

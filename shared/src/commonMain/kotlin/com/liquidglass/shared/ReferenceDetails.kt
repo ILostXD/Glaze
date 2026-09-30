@@ -153,7 +153,7 @@ internal fun ArtistReferenceScreen(
                             0.55f to Color.Transparent,
                             1f to Color.Transparent,
                         )))
-                        Column(Modifier.align(Alignment.BottomCenter).padding(bottom = 40.dp),
+                        Column(Modifier.align(Alignment.BottomCenter).padding(bottom = 3.dp),
                             horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(
                                 artist.name,
@@ -177,6 +177,8 @@ internal fun ArtistReferenceScreen(
                                 favorite = favorite,
                                 favoriteEnabled = !favoritePending,
                                 favoriteLabel = artist.name,
+                                controlSize = 64.dp,
+                                playWidth = 184.dp,
                                 onFavorite = {
                                     val next = !favorite
                                     favorite = next
