@@ -393,6 +393,7 @@ class MainActivity : ComponentActivity() {
                         .put("track_id", trackId)) },
                     remove = { itemId -> sendJam(JSONObject().put("type", "queue.remove")
                         .put("item_id", itemId)) },
+                    clear = { sendJam(JSONObject().put("type", "queue.clear")) },
                     next = ::nextJamTrack,
                     share = ::shareJamInvite,
                     move = { itemId, to -> sendJam(JSONObject().put("type", "queue.move")
@@ -558,7 +559,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         jamSeedTrackIds = if (sessionId == null) queue.value.drop(currentIndex.intValue + 1)
-            .take(200).map(Song::id) else null
+            .take(1000).map(Song::id) else null
         closeJamTransport()
         val generation = jamGeneration
         val config = JamSaved(base, "", name.trim().ifBlank { account.username })

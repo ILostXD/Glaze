@@ -58,7 +58,6 @@ import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -71,7 +70,6 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
@@ -438,6 +436,7 @@ internal fun ReferencePlayerScreen(
                     onMove = { from, to -> if (jam.sessionId.isEmpty()) onMoveInQueue(from, to)
                         else jam.queue.getOrNull(from - 1)?.let { jamActions.move(it.id, to - 1) } },
                     jam = jam.takeIf { it.sessionId.isNotEmpty() },
+                    onClearJam = { if (jamActions.clear()) { onClearUpcoming(); true } else false },
                     onJamInvite = onJamInvite,
                     onJamSettings = onJamSettings,
                     onEndJam = { jamActions.leave(); queueOpen = false },
@@ -941,25 +940,49 @@ private fun WaitingDots(modifier: Modifier = Modifier) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun QueueContents(
     client: SubsonicClient, queue: List<Song>, currentIndex: Int,
     isPlaying: Boolean, artUrl: String?, onClearUpcoming: () -> Unit,
     onPlay: (Int) -> Unit, onRemove: (Int) -> Unit,
     onRestore: (Song, Int) -> Unit, onMove: (Int, Int) -> Unit,
-    jam: JamViewState?, onJamInvite: () -> Unit, onJamSettings: () -> Unit,
+    jam: JamViewState?, onClearJam: () -> Boolean,
+    onJamInvite: () -> Unit, onJamSettings: () -> Unit,
     onEndJam: () -> Unit,
 ) {
     var confirmEnd by remember { mutableStateOf(false) }
-    if (confirmEnd && jam != null) AlertDialog(
+    val sky = rememberSky()
+    LaunchedEffect(artUrl) { sky.invalidate(350) }
+    if (confirmEnd && jam != null) ModalBottomSheet(
         onDismissRequest = { confirmEnd = false },
-        title = { Text(if (jam.isHost) "End this Jam?" else "Leave this Jam?") },
-        text = { Text(if (jam.isHost) "The session will end for everyone." else "The others can keep listening.") },
-        confirmButton = { TextButton(onClick = { confirmEnd = false; onEndJam() }) {
-            Text(if (jam.isHost) "End Jam" else "Leave Jam")
-        } },
-        dismissButton = { TextButton(onClick = { confirmEnd = false }) { Text("Cancel") } },
-    )
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = Color.Transparent, contentColor = playerWhite,
+        shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp),
+        dragHandle = null, contentWindowInsets = { WindowInsets(0, 0, 0, 0) },
+        scrimColor = Color.Black.copy(alpha = 0.42f),
+    ) {
+        PlayerSheetSurface(artUrl, Modifier.fillMaxWidth()) {
+            Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 24.dp, vertical = 16.dp)) {
+                SheetHandle()
+                Text(if (jam.isHost) "End this Jam?" else "Leave this Jam?",
+                    color = playerWhite, fontSize = 23.sp, fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(top = 16.dp))
+                Text(if (jam.isHost) "Everyone will leave the shared queue. Your music keeps playing."
+                    else "You’ll leave the shared queue. The others can keep listening.",
+                    color = playerSecondary, fontSize = 15.sp,
+                    modifier = Modifier.padding(top = 8.dp, bottom = 26.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    QueueGlassPill("Keep listening", sky, Modifier.weight(1f)) { confirmEnd = false }
+                    QueueGlassPill(if (jam.isHost) "End Jam" else "Leave Jam", sky,
+                        Modifier.weight(1f), danger = true) {
+                        confirmEnd = false
+                        onEndJam()
+                    }
+                }
+            }
+        }
+    }
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = currentIndex.coerceIn(0, (queue.size - 1).coerceAtLeast(0)))
     var query by remember { mutableStateOf("") }
     val matchingRows = queue.withIndex().filter { (_, song) ->
@@ -1018,44 +1041,65 @@ private fun QueueContents(
     val duration = remaining.sumOf { it.durationSeconds.toLong() }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
-    PlayerSheetSurface(artUrl, Modifier.fillMaxSize()) {
+    Box(Modifier.fillMaxSize()) {
+    PlayerSheetSurface(artUrl, Modifier.matchParentSize().sky(sky)) {}
     Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize().navigationBarsPadding()) {
         SheetHandle()
+        if (jam != null) {
+            val hostName = jam.members.firstOrNull { it.id == jam.hostId }?.name
+                ?: jam.name.ifBlank { "Your" }
+            Text("${hostName}’s Jam", color = playerWhite, fontSize = 23.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(start = 22.dp, end = 22.dp, top = 12.dp, bottom = 14.dp))
+            Row(Modifier.fillMaxWidth().padding(start = 22.dp, end = 22.dp, bottom = 20.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                val self = jam.members.firstOrNull { it.id == jam.memberId }
+                    ?: JamMember(jam.memberId, jam.name.ifBlank { "You" })
+                val members = listOf(self) + jam.members.filterNot { it.id == jam.memberId }
+                val shown = members.take(3)
+                val hidden = (members.size - shown.size).coerceAtLeast(0)
+                Box(Modifier.width((70 + (shown.size - 1) * 25 + if (hidden > 0) 25 else 0).dp)
+                    .height(42.dp)) {
+                    shown.forEachIndexed { index, member ->
+                        Box(Modifier.offset(x = (30 + index * 25).dp)
+                            .zIndex((shown.size - index).toFloat())
+                            .border(2.dp, Color.Black.copy(alpha = 0.8f), CircleShape)) {
+                            JamAvatar(member, 38)
+                        }
+                    }
+                    if (hidden > 0) Box(Modifier.offset(x = (30 + shown.size * 25).dp)
+                        .size(38.dp).clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.17f))
+                        .border(1.dp, Color.White.copy(alpha = 0.26f), CircleShape),
+                        contentAlignment = Alignment.Center) {
+                        Text("+$hidden", color = playerWhite, fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold)
+                    }
+                    Box(Modifier.zIndex(10f)) {
+                        GlassIconButton(MaterialSymbols.RoundedFilled.Add, "Invite friends", sky,
+                            Color.White.copy(alpha = 0.15f), 42.dp, 24.dp, onClick = onJamInvite)
+                    }
+                }
+                Spacer(Modifier.weight(1f))
+                if (jam.isHost) GlassIconButton(MaterialSymbols.RoundedFilled.Settings,
+                    "Guest controls", sky, Color.White.copy(alpha = 0.15f), 42.dp, 21.dp,
+                    onClick = onJamSettings)
+                Spacer(Modifier.width(10.dp))
+                QueueGlassPill(if (jam.isHost) "End" else "Leave", sky,
+                    danger = true) { confirmEnd = true }
+            }
+        }
         Row(Modifier.fillMaxWidth().padding(start = 22.dp, end = 22.dp, top = 10.dp, bottom = 12.dp),
             horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            val hostName = jam?.members?.firstOrNull { it.id == jam.hostId }?.name
-                ?: jam?.name?.ifBlank { "Your" }
-            Text(if (jam == null) "${remaining.size} songs • ${formatQueueDuration(duration)}"
-                else "${hostName}’s Jam", color = playerWhite,
-                fontSize = if (jam == null) 17.sp else 23.sp, fontWeight = FontWeight.SemiBold)
+            Text("${remaining.size} ${if (remaining.size == 1) "song" else "songs"} • ${formatQueueDuration(duration)}", color = playerWhite,
+                fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
             if (jam == null) Box(Modifier.clip(CircleShape).background(Color.White.copy(alpha = 0.15f))
                 .clickable(onClick = onClearUpcoming).padding(horizontal = 14.dp, vertical = 9.dp)) {
                 Text("Clear queue", color = playerSecondary, fontSize = 14.sp)
-            }
+            } else if (jam.isHost) QueueGlassPill("Clear queue", sky) { onClearJam() }
         }
-        if (jam != null) Row(Modifier.fillMaxWidth().padding(start = 22.dp, end = 22.dp, bottom = 18.dp),
-            verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(40.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.14f))
-                .clickable(onClick = onJamInvite), contentAlignment = Alignment.Center) {
-                Icon(MaterialSymbols.RoundedFilled.Add, "Invite friends", tint = playerWhite, modifier = Modifier.size(25.dp))
-            }
-            Spacer(Modifier.width(7.dp))
-            jam.members.take(4).forEach { JamAvatar(it, 35) }
-            Spacer(Modifier.weight(1f))
-            if (jam.isHost) Box(Modifier.size(40.dp).clip(CircleShape)
-                .border(1.dp, playerSecondary, CircleShape).clickable(onClick = onJamSettings),
-                contentAlignment = Alignment.Center) {
-                Icon(MaterialSymbols.RoundedFilled.Settings, "Guest controls", tint = playerWhite, modifier = Modifier.size(21.dp))
-            }
-            Spacer(Modifier.width(10.dp))
-            Box(Modifier.clip(CircleShape).background(Color.White.copy(alpha = 0.13f))
-                .clickable { confirmEnd = true }.padding(horizontal = 18.dp, vertical = 10.dp)) {
-                Text(if (jam.isHost) "End" else "Leave", color = Color(0xFFFF7B8A),
-                    fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-            }
-        }
-        if (jam == null) BasicTextField(
+        BasicTextField(
             value = query,
             onValueChange = { query = it },
             singleLine = true,
@@ -1294,6 +1338,22 @@ private fun GlassIconButton(
         contentAlignment = Alignment.Center,
     ) {
         Icon(icon, contentDescription = label, tint = iconTint, modifier = Modifier.size(iconSize))
+    }
+}
+
+@Composable
+private fun QueueGlassPill(
+    text: String, sky: Sky, modifier: Modifier = Modifier,
+    danger: Boolean = false, onClick: () -> Unit,
+) {
+    Box(modifier.height(42.dp).clip(CircleShape)
+        .cloudy(sky = sky, radius = 24, tint = Color.White.copy(alpha = 0.15f), shape = CircleShape)
+        .border(1.dp, Brush.verticalGradient(listOf(
+            Color.White.copy(alpha = 0.34f), Color.White.copy(alpha = 0.07f))), CircleShape)
+        .clickable(role = Role.Button, onClick = onClick)
+        .padding(horizontal = 16.dp), contentAlignment = Alignment.Center) {
+        Text(text, color = if (danger) Color(0xFFFF8996) else playerWhite,
+            fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1)
     }
 }
 

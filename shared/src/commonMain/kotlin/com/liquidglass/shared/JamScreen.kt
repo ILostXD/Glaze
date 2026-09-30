@@ -60,6 +60,7 @@ data class JamActions(
     val leave: () -> Unit,
     val add: (trackId: String) -> Unit,
     val remove: (itemId: String) -> Unit,
+    val clear: () -> Boolean,
     val next: () -> Unit,
     val share: () -> Unit,
     val move: (itemId: String, toIndex: Int) -> Unit,
