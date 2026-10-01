@@ -9,15 +9,16 @@ plugins {
 }
 
 android {
-    namespace = "com.liquidglass"
+    namespace = "com.glaze"
     compileSdk = 36
 
     defaultConfig {
+        // Keep the installed identity so alpha updates retain data and Android Keystore access.
         applicationId = "com.liquidglass"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "1.0.0-alpha.6"
+        versionCode = 7
+        versionName = "1.0.0-alpha.7"
     }
 
     buildFeatures {

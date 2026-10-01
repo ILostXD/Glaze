@@ -1,0 +1,6 @@
+CREATE TABLE scrobble_outbox (
+    account_key TEXT NOT NULL,
+    track_id TEXT NOT NULL,
+    timestamp_ms INTEGER NOT NULL,
+    PRIMARY KEY (account_key, track_id, timestamp_ms)
+);

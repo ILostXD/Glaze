@@ -29,11 +29,14 @@ Glaze is an Android music player for [Navidrome](https://www.navidrome.org/) and
 
 ## What you can do
 
-- Browse and search songs, albums, artists, and playlists from your Subsonic-compatible library.
+- Browse your Subsonic-compatible library; global search covers songs, albums and artists. Playlist search stays within Playlists.
 - Play in the background with Android media controls; manage the queue, shuffle, and view lyrics when available.
 - Explore artwork-led album and artist pages, favorite music, and edit playlist order.
 - Choose light or dark mode and tune the mini-player, navigation, glass intensity, and gestures in Settings.
 - Start a Jam from Now Playing’s song actions to share a queue with friends on the same Navidrome library.
+- Search beside your profile and switch **Library / Discover** below it without retyping your query. Both result lists use matching glass cards and section headings. Discover browses released Deezer catalogue albums and songs not in your server library, with darker, borderless colour artwork and a download overlay. It uses the regular album page with the normal-colour **Download** button and per-track download icons instead of playback actions. Search song menus use the app's swipe-dismissible actions sheet.
+- Pull down at the top of **Home** to refresh, or use **Settings → Synchronize library** to see synchronization progress. Completed downloads automatically refresh the library, even after dismissing their status sheet.
+- A theme-coloured loading ring around your profile picture indicates active requests. Open **Settings → Downloads** for download history and status.
 
 ## Get started
 
@@ -43,7 +46,17 @@ Glaze is an Android music player for [Navidrome](https://www.navidrome.org/) and
 
 Glaze checks the connection before saving your account. Credentials are stored using Android Keystore-backed encryption, and Subsonic requests use salted token authentication. The app does not provide a music catalog or host your files.
 
-Jam needs a separate [Glaze Companion](https://github.com/ILostXD/GlazeCompanion) server over HTTPS. The host enters its companion admin token once; guests need only the server address and the invite code shared from the Jam sheet. Guest playback uses each phone’s own Navidrome connection, so everyone needs access to the same library. Invites, queue voting and host-controlled playback are supported; nearby discovery and QR invites are not yet implemented.
+Jam and Discover downloads need a separate [Glaze Companion](https://github.com/ILostXD/GlazeCompanion) server over HTTPS. Save its address in **Settings → Companion server**. Joining an invitation on another relay does not change your library-download server. Jam hosts and library-acquisition requests use salted authentication from the configured Navidrome account; the companion admin token is never stored in the phone app. Guests join using a shared link or QR code and play music through their own Navidrome connection, so everyone needs access to the same library. Jam runs with the playback service while the UI is closed, supports queue voting and applies guest permissions to Android media controls. Playback speed stays at 1× with repeat and shuffle disabled during Jam. Nearby discovery is not implemented.
+
+Listening time is logged locally per server/account, excluding pauses and buffering. Smart shuffle uses recent track IDs. Plays reaching half the track duration or four minutes, whichever is shorter, submit a Subsonic scrobble from any queue, including playlists; pending submissions persist per account and retry until acknowledged. Stats/Wrapped screens remain unfinished.
+
+Discover downloads search configured sources in priority order (slskd by default, optionally Qobuz with a subscription). The companion—not your phone—downloads, moves and rescans files. Status in the sheet progresses through searching, downloading, moved and rescanned, or shows a failure. Active downloads remain tracked after dismissing the sheet and refresh the phone library once rescanned. Only the Navidrome owner configured on the companion can submit jobs. SpotiFLAC is not integrated yet.
+
+Discover uses public Deezer metadata directly on the phone; it sends only the selected artist/title and request kind to the existing companion acquisition endpoint. It verifies ownership against all library albums and matching local tracks, including collaborative artist credits, shows up to 20 catalogue search matches per category, and never plays catalogue IDs or previews as library music.
+
+Artist favorites also follow releases: the companion reads Navidrome’s native artist stars, with no separate Follow button or follow list. Upcoming albums appear in **On the way**, the second Home shelf by default, and replace the featured album on artist pages. The existing album layout shows artwork, release countdown and a disabled preview of unreleased tracks. **Pre-Save** persists on the companion and submits an album to the normal acquisition pipeline on release day, even with the phone closed; favoriting alone never downloads music. You can undo a Pre-Save before release.
+
+Allow Android’s **Artist releases** notifications for announcements and completed Pre-Saves. A persisted native JobScheduler job checks while the app is closed, approximately every 15 minutes when Android permits network work; tapping a notification opens the release. Notifications are deduplicated per Navidrome account. Upcoming metadata comes from Apple’s public catalogue on the companion, skips ambiguous artist names, and refreshes every six hours. Catalogue timestamps drive the countdown; the exact availability time and catalogue coverage can vary by territory. Public catalogue tracks use acquisition actions, never fake playback IDs.
 
 ## Build from source
 
@@ -64,6 +77,45 @@ Run the local tests with:
 Live playback and server-dependent behavior require a reachable Navidrome/Subsonic account and an Android device or emulator.
 
 The project has two modules: `shared` holds the Subsonic client and Compose UI; `app` provides Android credential storage and the Media3 playback service.
+
+## Playback links and Android automation
+
+Song, album and playlist Share actions include a playback link using the item's Navidrome ID.
+Write just the link as an NFC tag's **URL/URI record**, or open it from an automation app:
+
+```text
+glaze://play/playlist/PLAYLIST_ID?shuffle=true&nowPlaying=true
+glaze://play/album/ALBUM_ID?shuffle=false&nowPlaying=true
+glaze://play/song/SONG_ID?nowPlaying=false
+```
+
+`shuffle` defaults to `false`; `nowPlaying` defaults to `true`. Set `nowPlaying=false` to keep
+the library view instead of opening the player. Shuffle uses your existing Smart Shuffle setting.
+Links use the account already signed into Glaze. If signed out, sign in to continue the request.
+Leave an active Jam before starting an automation queue. Empty or missing library items show an error.
+
+For Tasker or another app that sends Android intents, use action `com.glaze.action.PLAY`,
+package `com.liquidglass`, activity `com.glaze.MainActivity`, and these extras:
+
+| Extra | Type | Value |
+| --- | --- | --- |
+| `kind` | String | `song`, `album`, or `playlist` |
+| `id` | String | The Navidrome item ID from its playback link |
+| `shuffle` | Boolean | Optional; defaults to `false` |
+| `open_now_playing` | Boolean | Optional; defaults to `true` |
+
+The install package remains `com.liquidglass` so updates preserve your data and saved login.
+The old `com.liquidglass.MainActivity` component and `com.liquidglass.action.PLAY` action remain
+compatible with existing shortcuts. New automations should use the Glaze activity and action above.
+
+Example command (replace `PLAYLIST_ID`):
+
+```sh
+adb shell am start -a com.glaze.action.PLAY -n com.liquidglass/com.glaze.MainActivity \
+  --es kind playlist --es id PLAYLIST_ID --ez shuffle true --ez open_now_playing true
+```
+
+NFC must be enabled and the phone unlocked. A physical NFC tag was not tested during development.
 
 ## AI-assisted development
 

@@ -9,7 +9,7 @@ plugins {
 }
 
 compose.resources {
-    packageOfResClass = "com.liquidglass.shared.resources"
+    packageOfResClass = "com.glaze.shared.resources"
 }
 
 kotlin {
@@ -51,13 +51,13 @@ kotlin {
 sqldelight {
     databases {
         register("HistoryDatabase") {
-            packageName.set("com.liquidglass.shared.db")
+            packageName.set("com.glaze.shared.db")
         }
     }
 }
 
 android {
-    namespace = "com.liquidglass.shared"
+    namespace = "com.glaze.shared"
     compileSdk = 36
     defaultConfig {
         minSdk = 26

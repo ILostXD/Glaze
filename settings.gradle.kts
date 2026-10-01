@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "LiquidGlass2"
+rootProject.name = "Glaze"
 include(":app", ":shared")
