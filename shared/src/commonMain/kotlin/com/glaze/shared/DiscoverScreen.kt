@@ -54,7 +54,7 @@ internal fun LazyListScope.discoverResults(
                 DiscoverRow(album.title, album.artist, album.cover,
                     listOfNotNull(album.tracks.size.takeIf { it > 0 }?.let { "$it tracks" }, album.releaseDate.take(4).takeIf { it.isNotBlank() }).joinToString(" · "), "View album",
                     onClick = { onAlbum(album) },
-                    onDownload = { onRequest(LibraryRequest(album.artist, album.title, "album")) })
+                    onDownload = { onRequest(LibraryRequest(album.artist, album.title, "album", album.id)) })
             }
             if (results.tracks.isNotEmpty()) item {
                 SectionTitle("Songs", 14.dp)
@@ -63,7 +63,7 @@ internal fun LazyListScope.discoverResults(
                 DiscoverRow(track.title, track.artist, track.cover, track.albumTitle, "Download",
                     explicit = track.explicit,
                     onClick = { onAlbum(DiscoverAlbum(track.albumId, track.albumTitle, track.artist, track.cover, "", "", listOf(track))) },
-                    onDownload = { onRequest(LibraryRequest(track.artist, track.title, "track")) })
+                    onDownload = { onRequest(LibraryRequest(track.artist, track.title, "track", albumTitle = track.albumTitle.takeIf { it.isNotBlank() })) })
             }
             if (results.albums.isEmpty() && results.tracks.isEmpty()) item {
                 Text("No released matches outside your library.", color = MaterialTheme.colorScheme.onBackground,
@@ -75,8 +75,8 @@ internal fun LazyListScope.discoverResults(
 
 @Composable
 internal fun DiscoverArtistScreen(artist: DiscoverArtist, client: SubsonicClient, darkMode: Boolean,
-    onBack: () -> Unit, onAlbum: (DiscoverAlbum) -> Unit, onRequest: (LibraryRequest) -> Unit) {
-    val catalogue = remember(client) { DiscoverClient() }
+    onBack: () -> Unit, onAlbum: (DiscoverAlbum) -> Unit, onRequest: (LibraryRequest) -> Unit, acquisition: AcquisitionClient? = null) {
+    val catalogue = remember(client, acquisition) { DiscoverClient(companion = acquisition) }
     DisposableEffect(catalogue) { onDispose { catalogue.close() } }
     var albums by remember(artist.id) { mutableStateOf<List<DiscoverAlbum>>(emptyList()) }
     var loading by remember(artist.id) { mutableStateOf(true) }
@@ -111,7 +111,7 @@ internal fun DiscoverArtistScreen(artist: DiscoverArtist, client: SubsonicClient
             DiscoverRow(album.title, album.artist, album.cover,
                 listOfNotNull(album.tracks.size.takeIf { it > 0 }?.let { "$it tracks" }, album.releaseDate.take(4).takeIf { it.isNotBlank() }).joinToString(" · "), "View album",
                 onClick = { onAlbum(album) },
-                onDownload = { onRequest(LibraryRequest(album.artist, album.title, "album")) })
+                onDownload = { onRequest(LibraryRequest(album.artist, album.title, "album", album.id)) })
         }
     }
 }
@@ -165,12 +165,12 @@ internal fun DiscoverRow(title: String, artist: String, cover: String, subtitle:
 @Composable
 internal fun DiscoverAlbumScreen(album: DiscoverAlbum, client: SubsonicClient, darkMode: Boolean,
     onArtworkColor: suspend (String?) -> Color, onBack: () -> Unit,
-    onShare: (String) -> Unit, onRequest: (LibraryRequest) -> Unit) {
-    val catalogue = remember(client) { DiscoverClient() }
+    onShare: (String) -> Unit, onRequest: (LibraryRequest) -> Unit, acquisition: AcquisitionClient? = null) {
+    val catalogue = remember(client, acquisition) { DiscoverClient(companion = acquisition) }
     DisposableEffect(catalogue) { onDispose { catalogue.close() } }
     var detail by remember(album.id) { mutableStateOf(album) }
     LaunchedEffect(album.id) {
-        try { detail = catalogue.album(album.id) }
+        try { if (album.tracks.isEmpty()) detail = catalogue.album(album.id) }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { /* Keep the metadata already shown in search. */ }
     }
@@ -185,7 +185,7 @@ internal fun DiscoverAlbumScreen(album: DiscoverAlbum, client: SubsonicClient, d
         }
         item {
             CollectionControls(darkMode, onShuffle = {},
-                onPlay = { onRequest(LibraryRequest(detail.artist, detail.title, "album")) },
+                onPlay = { onRequest(LibraryRequest(detail.artist, detail.title, "album", detail.id)) },
                 favorite = false, onFavorite = {}, favoriteEnabled = false, download = true)
         }
         item { CollectionDivider() }
@@ -194,7 +194,7 @@ internal fun DiscoverAlbumScreen(album: DiscoverAlbum, client: SubsonicClient, d
                 artist = track.artist, album = detail.title, durationSeconds = track.duration,
                 isExplicit = track.explicit), index + 1, false, client, onPlay = {},
                 dividerAbove = index > 0, downloadOnly = true) {
-                onRequest(LibraryRequest(track.artist, track.title, "track"))
+                onRequest(LibraryRequest(track.artist, track.title, "track", albumTitle = track.albumTitle.takeIf { it.isNotBlank() }))
             }
         }
         item { AlbumFooter(detail.tracks.size, detail.tracks.sumOf { it.duration.toLong() }, detail.releaseDate) }

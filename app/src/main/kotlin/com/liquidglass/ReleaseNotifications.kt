@@ -15,6 +15,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.glaze.shared.ReleaseClient
@@ -57,15 +60,24 @@ internal object ReleaseNotifications {
             .joinToString("") { "%02x".format(it) }
         val prefs = context.getSharedPreferences("release_notifications", Context.MODE_PRIVATE)
         val seen = prefs.getStringSet(key, emptySet()).orEmpty().toMutableSet()
+        val active = manager.activeNotifications.map { it.id }.toSet()
+        val icon = Bitmap.createBitmap(128, 128, Bitmap.Config.ARGB_8888).apply {
+            val canvas = Canvas(this)
+            canvas.drawColor(Color.BLACK)
+            ContextCompat.getDrawable(context, R.drawable.ic_glaze_notification)?.apply {
+                setBounds(16, 16, 112, 112)
+                draw(canvas)
+            }
+        }
         albums.forEach { album ->
             val completed = album.saved && album.status == "rescanned"
             val event = releaseNotificationEvent(album, System.currentTimeMillis()) ?: return@forEach
-            if (event in seen) return@forEach
+            if (event in seen && event.hashCode() !in active) return@forEach
             val intent = Intent(context, MainActivity::class.java).putExtra(RELEASE_ID, album.id)
                 .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             val pending = PendingIntent.getActivity(context, event.hashCode(), intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
             manager.notify(event.hashCode(), NotificationCompat.Builder(context, "releases")
-                .setSmallIcon(android.R.drawable.ic_popup_reminder)
+                .setSmallIcon(R.drawable.ic_glaze_notification).setLargeIcon(icon).setOnlyAlertOnce(true)
                 .setContentTitle(if (completed) "${album.title} is in your library" else "${album.artist} has an album on the way")
                 .setContentText(if (completed) "Your Pre-Save is ready to listen." else "${album.title} · Releases ${album.releaseDate}")
                 .setContentIntent(pending).setAutoCancel(true).build())

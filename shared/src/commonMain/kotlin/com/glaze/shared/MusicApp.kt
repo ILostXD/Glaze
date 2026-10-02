@@ -1,7 +1,10 @@
 package com.glaze.shared
 
 import com.composables.icons.materialsymbols.MaterialSymbols
+import com.composables.icons.materialsymbols.roundedfilled.Speaker
+import com.composables.icons.materialsymbols.roundedfilled.Headphones
 import com.composables.icons.materialsymbols.roundedfilled.Download
+import com.composables.icons.materialsymbols.roundedfilled.Edit
 import com.composables.icons.materialsymbols.roundedfilled.Arrow_back
 import com.composables.icons.materialsymbols.roundedfilled.Arrow_forward
 import com.composables.icons.materialsymbols.roundedfilled.Home
@@ -280,6 +283,7 @@ private data class LoadedPage(
     val artistInfo: ArtistInfo, val artistDetails: Artist?,
 )
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MusicApp(
     credentials: ServerCredentials?,
@@ -425,6 +429,23 @@ fun MusicApp(
                     onEnableReleaseNotifications = onEnableReleaseNotifications,
                     releaseToOpen = releaseToOpen, onReleaseOpened = onReleaseOpened,
                     playerPresentation = playerPresentation, onPlayerPresentationHandled = onPlayerPresentationHandled)
+                if (jam.chooseOutput && !jam.isHost && jam.sessionId.isNotEmpty()) {
+                    ModalBottomSheet(onDismissRequest = { jamActions.setListenLocally(jam.listenLocally) },
+                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                        shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp)) {
+                        Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 24.dp)
+                            .padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                            Text("Where are you listening?", style = MaterialTheme.typography.headlineSmall)
+                            Text("Everyone controls the same queue.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            JamButton("On the host’s phone", MaterialSymbols.RoundedFilled.Speaker) {
+                                jamActions.setListenLocally(false)
+                            }
+                            JamButton("On this phone", MaterialSymbols.RoundedFilled.Headphones, primary = false) {
+                                jamActions.setListenLocally(true)
+                            }
+                        }
+                    }
+                }
             }
         }
         }
@@ -624,14 +645,11 @@ private fun LibraryScreen(
     LaunchedEffect(jam.pendingInvite) {
         if (jam.pendingInvite.isNotEmpty()) jamOpen = true
     }
-    LaunchedEffect(jam.sessionId) {
+    LaunchedEffect(jam.sessionId, nowPlaying != null) {
         if (jam.sessionId.isNotEmpty() && jamOpen && nowPlaying != null) {
             jamOpen = false
             playerExpanded = true
             jamQueueRequest++
-            delay(250)
-            jamGuestControls = false
-            jamOpen = true
         }
     }
     var loadedDetail by remember { mutableStateOf<Detail?>(null) }
@@ -950,14 +968,15 @@ private fun LibraryScreen(
                             upcoming = (upcoming.filterNot { it.id == updated.id } + updated.copy(followed = upcoming.firstOrNull { it.id == updated.id }?.followed == true)).sortedBy { it.releaseAt }
                             artistUpcoming = artistUpcoming.map { if (it.id == updated.id) updated else it }
                         }, onEnableNotifications = onEnableReleaseNotifications,
-                        onRequest = { libraryRequest = it }, onArtist = { openDetail(Detail.ArtistPage(it)) })
+                        onRequest = { libraryRequest = it }, onArtist = { openDetail(Detail.ArtistPage(it)) },
+                        libraryRevision = songsRevision, onPlay = onPlay, onAddNext = onAddNext)
                     is Detail.DiscoverAlbumPage -> DiscoverAlbumScreen(page.album, client, darkMode,
                         onArtworkColor, onBack = ::goBack, onShare = onShareCollection,
-                        onRequest = { libraryRequest = it })
+                        onRequest = { libraryRequest = it }, acquisition = acquisitionApi)
                     is Detail.DiscoverArtistPage -> DiscoverArtistScreen(page.artist, client, darkMode,
                         onBack = ::goBack,
                         onAlbum = { openDetail(Detail.DiscoverAlbumPage(it)) },
-                        onRequest = { libraryRequest = it })
+                        onRequest = { libraryRequest = it }, acquisition = acquisitionApi)
                     is Detail.ArtistPage -> ArtistReferenceScreen(
                         artistDetails ?: page.artist, artistAlbums, artistSongs, artistInfo, client, darkMode,
                         onBack = ::goBack,
@@ -1026,7 +1045,7 @@ private fun LibraryScreen(
                     else -> homeStateHolder.SaveableStateProvider("home") {
                         ReferenceHomeScreen(
                         albums, recentAlbums, orderedPlaylists, client, darkMode, loading, error ?: releaseError,
-                        upcoming = upcoming.filter { it.followed && it.releaseAt > kotlin.time.Clock.System.now().toEpochMilliseconds() },
+                        upcoming = upcoming.filter { it.followed && (releaseDaysUntil(it.releaseDate, kotlin.time.Clock.System.now().toEpochMilliseconds())?.let { days -> days > 0 } ?: (it.releaseAt > kotlin.time.Clock.System.now().toEpochMilliseconds())) },
                         onUpcoming = { openDetail(Detail.UpcomingAlbumPage(it)) },
                         sections = settings.homeSections.filterNot { it in settings.hiddenHomeSections },
                         bottomPadding = chromeSpace,
@@ -1153,7 +1172,7 @@ private fun LibraryScreen(
                         { openDetail(Detail.GenrePage(it)) },
                         chromeSpace, searchListState, songsRevision, discover, { discover = it },
                         { openDetail(Detail.DiscoverAlbumPage(it)) },
-                        { libraryRequest = it }, onShareSong)
+                        { libraryRequest = it }, onShareSong, acquisitionApi)
                 }
             }
         }
@@ -1175,7 +1194,10 @@ private fun LibraryScreen(
         containerColor = Color.Transparent, contentColor = Color.White,
         shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp), dragHandle = null,
         contentWindowInsets = { WindowInsets(0, 0, 0, 0) }) {
-        AcquisitionStatusSheet(acquisitionJobs.values.sortedByDescending { it.createdAt }, historyError)
+        AcquisitionStatusSheet(acquisitionJobs.values.sortedByDescending { it.createdAt }, historyError) { job ->
+            val updated = acquisitionApi.retry(job.id)
+            acquisitionJobs[updated.id] = updated
+        }
     }
     ReferenceChrome(
         chromeSky, client, nowPlaying, isPlaying, darkMode,
@@ -1500,8 +1522,9 @@ private fun SearchContent(
     onDiscoverAlbum: (DiscoverAlbum) -> Unit,
     onRequest: (LibraryRequest) -> Unit,
     onShareSong: (Song) -> Unit,
+    acquisition: AcquisitionClient,
 ) {
-    val catalogue = remember(client) { DiscoverClient() }
+    val catalogue = remember(client, acquisition) { DiscoverClient(companion = acquisition) }
     DisposableEffect(catalogue) { onDispose { catalogue.close() } }
     var discoverResults by remember { mutableStateOf<DiscoverResults?>(null) }
     var discoverLoading by remember { mutableStateOf(false) }

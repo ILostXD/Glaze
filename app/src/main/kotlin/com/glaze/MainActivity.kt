@@ -240,6 +240,17 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+            val guestJam = jam.value.sessionId.isNotEmpty() && !jam.value.isHost
+            val displayedSong = if (guestJam) jamSession.remoteSong.value else nowPlaying.value
+            LaunchedEffect(displayedSong?.coverArt) {
+                val artworkId = displayedSong?.coverArt
+                val account = credentials.value
+                if (guestJam && artworkId != null && account != null) {
+                    val colors = withContext(Dispatchers.IO) { sampleArtworkColors(account, artworkId) }
+                    playerColor.value = colors.first
+                    playerBackdropColor.value = colors.second
+                }
+            }
             MusicApp(
                 playerPresentation = playerPresentation.value,
                 onPlayerPresentationHandled = { playerPresentation.value = null },
@@ -271,17 +282,17 @@ class MainActivity : ComponentActivity() {
                     credentials.value = null
                     ReleaseNotifications.schedule(this@MainActivity, false)
                 },
-                nowPlaying = nowPlaying.value,
-                isPlaying = isPlaying.value,
-                isBuffering = isBuffering.value,
+                nowPlaying = displayedSong,
+                isPlaying = if (guestJam) jam.value.playback?.playing == true else isPlaying.value,
+                isBuffering = !guestJam && isBuffering.value,
                 playerColor = playerColor.value,
                 playerBackdropColor = playerBackdropColor.value,
                 queue = queue.value,
                 currentIndex = currentIndex.intValue,
-                positionMs = positionMs.longValue,
-                durationMs = durationMs.longValue,
-                isShuffleEnabled = isShuffleEnabled.value,
-                repeatMode = repeatMode.intValue,
+                positionMs = if (guestJam) jamSession.remotePosition() else positionMs.longValue,
+                durationMs = if (guestJam) (displayedSong?.durationSeconds ?: 0) * 1000L else durationMs.longValue,
+                isShuffleEnabled = if (guestJam) jam.value.playback?.shuffle == true else isShuffleEnabled.value,
+                repeatMode = if (guestJam) jam.value.playback?.repeat ?: 0 else repeatMode.intValue,
                 playbackSpeed = playbackSpeed.floatValue,
                 settings = appSettings.value,
                 onSettingsChange = { update ->
@@ -292,7 +303,8 @@ class MainActivity : ComponentActivity() {
                     ReleaseNotifications.schedule(this@MainActivity, credentials.value != null && updated.companionUrl.isNotBlank())
                 },
                 onReadPosition = {
-                    controller?.let { player ->
+                    if (guestJam) jamSession.remotePosition() to ((displayedSong?.durationSeconds ?: 0) * 1000L)
+                    else controller?.let { player ->
                         player.currentPosition.coerceAtLeast(0L) to
                             (player.duration.takeUnless { it == C.TIME_UNSET || it < 0 } ?: 0L)
                     } ?: (positionMs.longValue to durationMs.longValue)
@@ -304,14 +316,18 @@ class MainActivity : ComponentActivity() {
                     }
                 },
                 onToggleShuffle = {
-                    controller?.let { player ->
+                    if (jam.value.sessionId.isNotEmpty()) jamSession.requestPlayback("shuffle", shuffle = !(jam.value.playback?.shuffle ?: isShuffleEnabled.value))
+                    else controller?.let { player ->
                         if (player.isCommandAvailable(Player.COMMAND_SET_SHUFFLE_MODE)) {
                             player.shuffleModeEnabled = !player.shuffleModeEnabled
                         }
                     }
                 },
                 onCycleRepeat = {
-                    controller?.let { player ->
+                    if (jam.value.sessionId.isNotEmpty()) {
+                        val mode = jam.value.playback?.repeat ?: repeatMode.intValue
+                        jamSession.requestPlayback("repeat", repeat = when (mode) { 0 -> 2; 2 -> 1; else -> 0 })
+                    } else controller?.let { player ->
                         if (player.isCommandAvailable(Player.COMMAND_SET_REPEAT_MODE)) {
                             player.repeatMode = when (player.repeatMode) {
                                 Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
@@ -348,9 +364,10 @@ class MainActivity : ComponentActivity() {
                 } },
                 onSkipNext = { if (jam.value.sessionId.isEmpty()) controller?.seekToNextMediaItem()
                     else if (jam.value.isHost || jam.value.guestPlayback) nextJamTrack() },
-                onSkipPrevious = { if (jam.value.sessionId.isEmpty() || jam.value.isHost)
-                    controller?.seekToPrevious() },
-                onSeek = { if (jam.value.sessionId.isEmpty() || jam.value.isHost) controller?.seekTo(it) },
+                onSkipPrevious = { if (jam.value.sessionId.isEmpty()) controller?.seekToPrevious()
+                    else jamSession.requestPlayback("previous") },
+                onSeek = { if (jam.value.sessionId.isEmpty()) controller?.seekTo(it)
+                    else jamSession.requestPlayback("seek", position = it) },
                 onAddNext = ::addNext,
                 onAddToQueue = ::addToQueue,
                 onShareSong = { song ->
@@ -391,6 +408,9 @@ class MainActivity : ComponentActivity() {
                 profileAvatar = profileAvatar.value,
                 onPickProfileAvatar = { avatarPicker.launch("image/*") },
                 jamActions = JamActions(
+                    chooseOutput = jamSession::chooseOutput,
+                    setListenLocally = jamSession::setListenLocally,
+                    playItem = { jamSession.requestPlayback("queue_item", itemId = it) },
                     connect = ::startJam,
                     leave = ::leaveJam,
                     add = { trackId -> sendJam(JSONObject().put("type", "queue.add")
@@ -481,22 +501,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun play(song: Song, queue: List<Song>, shuffled: Boolean = false) {
-        if (jam.value.sessionId.isNotEmpty() && !jam.value.isHost) {
-            if (jam.value.guestPlayback) sendJam(JSONObject().put("type", "playback.set")
-                .put("track_id", song.id).put("playing", true).put("position_ms", 0))
+        if (jam.value.sessionId.isNotEmpty()) {
+            jamSession.requestPlayback("track", trackId = song.id)
             return
         }
         val player = controller ?: run { pendingPlay = Triple(song, queue, shuffled); return }
         val account = credentials.value ?: return
-        if (jam.value.isHost && player.currentMediaItemIndex >= 0) {
-            val item = SubsonicClient(account).use { song.toMediaItem(it) }
-            val index = player.currentMediaItemIndex
-            player.replaceMediaItem(index, item)
-            player.seekToDefaultPosition(index)
-            player.prepare()
-            player.play()
-            return
-        }
         val ordered = queue.ifEmpty { listOf(song) }
         val items = SubsonicClient(account).use { client -> ordered.map { it.toMediaItem(client) } }
         // Start each explicitly selected queue in its requested mode; never inherit a hidden order.

@@ -49,6 +49,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -376,26 +377,39 @@ internal fun ReferencePlayerScreen(
                         horizontalArrangement = Arrangement.SpaceEvenly,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        PlainPlayerIcon(MaterialSymbols.RoundedFilled.Shuffle, if (isShuffleEnabled) "Shuffle on" else "Shuffle off",
-                            21.dp, if (isShuffleEnabled) accent else playerSecondary,
-                            active = isShuffleEnabled, enabled = jam.sessionId.isEmpty(), onClick = onToggleShuffle)
-                        PlainPlayerIcon(MaterialSymbols.RoundedFilled.Lyrics, "Lyrics", 21.dp,
-                            playerSecondary) { view = PlayerView.Lyrics }
-                        Box {
-                            PlainPlayerIcon(MaterialSymbols.RoundedFilled.Queue_music,
-                                if (jam.sessionId.isNotEmpty()) "${jam.members.firstOrNull { it.id == jam.hostId }?.name ?: "Your"}’s Jam queue" else "Queue",
-                                21.dp, playerSecondary) { queueOpen = true }
-                            if (jam.sessionId.isNotEmpty()) {
-                                Box(Modifier.align(Alignment.TopEnd)) {
-                                    JamAvatar(jam.members.firstOrNull { it.id == jam.memberId }
-                                        ?: JamMember(jam.memberId, jam.name.ifBlank { "You" }), 17)
-                                }
-                            }
+                        val jamControls = jam.sessionId.isEmpty() || jam.isHost || (jam.connection == "Connected" && jam.guestPlayback)
+                        Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                            PlainPlayerIcon(MaterialSymbols.RoundedFilled.Shuffle, if (isShuffleEnabled) "Shuffle on" else "Shuffle off",
+                                21.dp, if (isShuffleEnabled) accent else playerSecondary,
+                                active = isShuffleEnabled, enabled = jamControls, onClick = onToggleShuffle)
                         }
-                        PlainPlayerIcon(if (repeatMode == 1) MaterialSymbols.RoundedFilled.Repeat_one else MaterialSymbols.RoundedFilled.Repeat,
-                            when (repeatMode) { 1 -> "Repeat one"; 2 -> "Repeat all"; else -> "Repeat off" },
-                            21.dp, if (repeatMode == 0) playerSecondary else accent,
-                            active = repeatMode != 0, enabled = jam.sessionId.isEmpty(), onClick = onCycleRepeat)
+                        Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                            PlainPlayerIcon(MaterialSymbols.RoundedFilled.Lyrics, "Lyrics", 21.dp,
+                                playerSecondary) { view = PlayerView.Lyrics }
+                        }
+                        Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                            if (jam.sessionId.isNotEmpty()) {
+                                Row(Modifier.wrapContentWidth(unbounded = true).clip(CircleShape)
+                                    .background(Color.White.copy(alpha = 0.09f))
+                                    .clickable(role = Role.Button) { queueOpen = true }
+                                    .padding(horizontal = 12.dp).height(48.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    JamAvatar(jam.members.firstOrNull { it.id == jam.memberId }
+                                        ?: JamMember(jam.memberId, jam.name.ifBlank { "You" }), 26)
+                                    Icon(MaterialSymbols.RoundedFilled.Queue_music,
+                                        "${jam.members.firstOrNull { it.id == jam.hostId }?.name ?: "Your"}’s Jam queue",
+                                        tint = playerSecondary, modifier = Modifier.size(26.dp))
+                                }
+                            } else PlainPlayerIcon(MaterialSymbols.RoundedFilled.Queue_music,
+                                "Queue", 21.dp, playerSecondary) { queueOpen = true }
+                        }
+                        Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                            PlainPlayerIcon(if (repeatMode == 1) MaterialSymbols.RoundedFilled.Repeat_one else MaterialSymbols.RoundedFilled.Repeat,
+                                when (repeatMode) { 1 -> "Repeat one"; 2 -> "Repeat all"; else -> "Repeat off" },
+                                21.dp, if (repeatMode == 0) playerSecondary else accent,
+                                active = repeatMode != 0, enabled = jamControls, onClick = onCycleRepeat)
+                        }
                     }
                 }
                 PlayerView.Lyrics -> LyricsView(client, song, livePosition, onSeek) {
@@ -429,8 +443,7 @@ internal fun ReferencePlayerScreen(
                             queueOpen = false
                         } else if (index > 0 && (jam.isHost || jam.guestPlayback)) {
                             jam.queue.getOrNull(index - 1)?.let { entry ->
-                                jamActions.move(entry.id, 0)
-                                jamActions.next()
+                                jamActions.playItem(entry.id)
                                 queueOpen = false
                             }
                         }

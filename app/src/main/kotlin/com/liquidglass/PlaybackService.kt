@@ -84,7 +84,7 @@ class PlaybackService : MediaLibraryService() {
     override fun onCreate() {
         super.onCreate()
         setMediaNotificationProvider(DefaultMediaNotificationProvider.Builder(this).build().apply {
-            setSmallIcon(R.drawable.glaze_launcher_foreground)
+            setSmallIcon(R.drawable.ic_glaze_notification)
         })
         val audioAttributes = AudioAttributes.Builder()
             .setUsage(C.USAGE_MEDIA)
@@ -117,24 +117,44 @@ class PlaybackService : MediaLibraryService() {
         val sessionPlayer = object : ForwardingSimpleBasePlayer(exoPlayer) {
             fun refreshCommands() = invalidateState()
             override fun getState(): State {
-                val state = super.getState()
-                return state.buildUpon().setAvailableCommands(jamPlayerCommands(state.availableCommands, jamSession.jam.value)).build()
+                val native = super.getState()
+                val jam = jamSession.jam.value
+                val state = native.buildUpon().setAvailableCommands(jamPlayerCommands(native.availableCommands, jam)).build()
+                return jamPlayerState(state, jam, jamSession.remoteItem,
+                    jamSession.remoteSong.value?.durationSeconds?.times(1_000L), jamSession::remotePosition)
             }
             override fun handleSetPlayWhenReady(ready: Boolean): ListenableFuture<*> {
                 val jam = jamSession.jam.value
-                if (jam.sessionId.isNotEmpty() && !jam.isHost) {
+                if (jam.sessionId.isNotEmpty()) {
                     jamSession.guestPlayback(ready)
                     return Futures.immediateVoidFuture()
                 }
                 return super.handleSetPlayWhenReady(ready)
             }
             override fun handleSeek(index: Int, positionMs: Long, command: Int): ListenableFuture<*> {
-                if (jamSession.jam.value.sessionId.isNotEmpty() && command in setOf(
-                    Player.COMMAND_SEEK_TO_NEXT, Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)) {
-                    jamSession.nextJamTrack()
+                if (jamSession.jam.value.sessionId.isNotEmpty()) {
+                    when (command) {
+                        Player.COMMAND_SEEK_TO_NEXT, Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM -> jamSession.nextJamTrack()
+                        Player.COMMAND_SEEK_TO_PREVIOUS, Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM -> jamSession.requestPlayback("previous")
+                        Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM -> jamSession.requestPlayback("seek", position = positionMs)
+                    }
                     return Futures.immediateVoidFuture()
                 }
                 return super.handleSeek(index, positionMs, command)
+            }
+            override fun handleSetShuffleModeEnabled(enabled: Boolean): ListenableFuture<*> {
+                if (jamSession.jam.value.sessionId.isNotEmpty()) {
+                    jamSession.requestPlayback("shuffle", shuffle = enabled)
+                    return Futures.immediateVoidFuture()
+                }
+                return super.handleSetShuffleModeEnabled(enabled)
+            }
+            override fun handleSetRepeatMode(repeatMode: Int): ListenableFuture<*> {
+                if (jamSession.jam.value.sessionId.isNotEmpty()) {
+                    jamSession.requestPlayback("repeat", repeat = repeatMode)
+                    return Futures.immediateVoidFuture()
+                }
+                return super.handleSetRepeatMode(repeatMode)
             }
         }
         jamSession.onStateChanged = sessionPlayer::refreshCommands

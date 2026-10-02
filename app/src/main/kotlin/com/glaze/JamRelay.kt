@@ -76,7 +76,8 @@ internal fun parseJamSnapshot(json: JSONObject): JamSnapshot {
         } },
         JamPlayback(playback.getString("track_id"), playback.getBoolean("playing"),
             playback.getLong("position_ms"), playback.getLong("updated_at_ms"),
-            json.getLong("server_time_ms")), json.optBoolean("guest_playback"))
+            json.getLong("server_time_ms"), playback.optBoolean("shuffle"),
+            playback.optInt("repeat")), json.optBoolean("guest_playback"))
 }
 
 

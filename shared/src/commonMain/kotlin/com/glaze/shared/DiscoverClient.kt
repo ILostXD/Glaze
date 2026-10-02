@@ -5,6 +5,7 @@ import io.ktor.client.call.body
 import io.ktor.client.request.get
 import io.ktor.client.request.parameter
 import kotlinx.coroutines.async
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.*
@@ -23,7 +24,7 @@ internal data class DiscoverAlbum(
 internal data class DiscoverArtist(val id: String, val name: String, val picture: String)
 
 internal data class DiscoverResults(val artists: List<DiscoverArtist>, val albums: List<DiscoverAlbum>, val tracks: List<DiscoverTrack>)
-internal data class LibraryRequest(val artist: String, val title: String, val kind: String)
+internal data class LibraryRequest(val artist: String, val title: String, val kind: String, val catalogueAlbumId: String? = null, val albumTitle: String? = null)
 
 internal fun catalogueKey(artist: String, title: String): String =
     listOf(artist, title).joinToString("|") { value ->
@@ -38,7 +39,7 @@ internal fun albumOwnershipKey(artist: String, title: String): String {
     return catalogueKey(artist, baseTitle)
 }
 
-private fun catalogueArtistCredits(credit: String, artists: List<Artist> = emptyList()): List<String> {
+internal fun catalogueArtistCredits(credit: String, artists: List<Artist> = emptyList()): List<String> {
     val names = artists.map { it.name }
     // ponytail: legacy comma/semicolon credits are ambiguous for band names; prefer structured artists.
     return (listOf(credit) + if (names.size > 1) names else
@@ -58,7 +59,8 @@ internal fun catalogueQueryMatches(query: String, artist: String, title: String)
 }
 
 /** Public metadata only. A catalogue ID must never be passed to Subsonic playback. */
-internal class DiscoverClient(private val http: HttpClient = platformHttpClient()) : AutoCloseable {
+internal class DiscoverClient(private val http: HttpClient = platformHttpClient(),
+    private val companion: AcquisitionClient? = null) : AutoCloseable {
     private val json = Json { ignoreUnknownKeys = true }
 
     private suspend fun request(path: String, query: String? = null, index: Int = 0): JsonObject {
@@ -72,7 +74,10 @@ internal class DiscoverClient(private val http: HttpClient = platformHttpClient(
 
     suspend fun album(id: String): DiscoverAlbum {
         require(id.all(Char::isDigit) && id.isNotEmpty())
-        val value = request("album/$id")
+        val value = if (companion == null) request("album/$id") else try {
+            json.parseToJsonElement(companion.catalogueAlbum(id)).jsonObject
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { request("album/$id") }
         val title = value.text("title")
         val cover = value.text("cover_big")
         val expected = value["nb_tracks"]?.jsonPrimitive?.intOrNull ?: error("Track count unavailable")

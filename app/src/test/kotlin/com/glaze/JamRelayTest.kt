@@ -28,11 +28,13 @@ class JamRelayTest {
             "guest_playback":true,
             "members":[{"id":"host","name":"Andy"}],
             "queue":[{"id":"item","track_id":"song","added_by":"host","votes":{"host":true}}],
-            "playback":{"track_id":"song","playing":true,"position_ms":1200,"updated_at_ms":9000}
+            "playback":{"track_id":"song","playing":true,"position_ms":1200,"updated_at_ms":9000,"shuffle":true,"repeat":2}
         }""")
         val snapshot = parseJamSnapshot(json)
         assertEquals("Andy", snapshot.members.single().name)
         assertEquals(true, snapshot.guestPlayback)
+        assertEquals(true, snapshot.playback.shuffle)
+        assertEquals(2, snapshot.playback.repeat)
         assertEquals(setOf("host"), snapshot.queue.single().voters)
         assertEquals(2_200L, snapshot.playback.targetPosition(10_000))
     }

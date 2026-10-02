@@ -84,7 +84,15 @@ class ReleaseClient(private val address: String, private val credentials: Server
     override fun close() = http.close()
 }
 
-internal fun releaseCountdown(releaseAt: Long, now: Long): List<Long> {
-    val seconds = ((releaseAt - now).coerceAtLeast(0) + 999) / 1_000
-    return listOf(seconds / 86_400, seconds / 3_600 % 24, seconds / 60 % 60, seconds % 60)
+internal fun releaseTrackTitle(title: String): String = title.replace(
+    Regex("\\s*\\((?:feat\\.?|ft\\.?|featuring)\\s+[^)]*\\)\\s*$", RegexOption.IGNORE_CASE), "").trim()
+
+internal fun installedReleaseTrack(track: ReleaseTrack, candidates: List<Song>): Song? {
+    val title = catalogueKey("", releaseTrackTitle(track.title))
+    val artist = catalogueKey(track.artist, "")
+    return candidates.firstOrNull { song ->
+        catalogueKey("", releaseTrackTitle(song.title)) == title &&
+            catalogueArtistCredits(song.artist, song.artists).any { catalogueKey(it, "") == artist } &&
+            (track.duration <= 0 || song.durationSeconds <= 0 || kotlin.math.abs(track.duration - song.durationSeconds) <= 3)
+    }
 }

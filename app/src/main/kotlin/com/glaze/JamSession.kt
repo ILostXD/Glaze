@@ -24,6 +24,8 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONObject
+import org.json.JSONArray
+import kotlinx.coroutines.CancellationException
 import kotlin.math.abs
 import javax.inject.Inject
 
@@ -53,28 +55,37 @@ internal class JamSession @Inject constructor(
     private var jamGeneration = 0
     private var jamRevision = -1L
     private var jamClockOffsetMs = 0L
-    private var jamApplyingUntil = 0L
-    private var jamAwaitingNext = false
-    private var jamAdvancing = false
-    private var jamLoadingTrack: String? = null
-    private var lastPublished: Triple<String, Boolean, Long>? = null
+    val remoteSong = mutableStateOf<Song?>(null)
+    var remoteItem: MediaItem? = null
+        private set
+    private val songs = mutableMapOf<String, Song>()
+    private val consumed = mutableSetOf<String>()
+    private val pendingConsumption = linkedSetOf<String>()
+    private var hostCommand: Job? = null
+    private var lastPublished: String? = null
+    private var guestApplying = false
+    private var restoringQueue: List<String>? = null
     private val listener = object : Player.Listener {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-            if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO && jam.value.isHost &&
-                jam.value.queue.isNotEmpty()) nextJamTrack()
+            if (!jam.value.isHost) return
+            (mediaItem?.localConfiguration?.tag as? String)?.takeIf { id ->
+                id !in consumed && jam.value.queue.any { it.id == id }
+            }?.let(pendingConsumption::add)
         }
-
         override fun onEvents(player: Player, events: Player.Events) {
-            if (events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION) ||
-                events.contains(Player.EVENT_PLAY_WHEN_READY_CHANGED) ||
-                events.contains(Player.EVENT_POSITION_DISCONTINUITY) ||
-                events.contains(Player.EVENT_PLAYBACK_STATE_CHANGED)) {
-                if (jam.value.isHost && player.playbackState == Player.STATE_ENDED &&
-                    jam.value.queue.isNotEmpty() && !jamAdvancing) {
-                    jamAdvancing = true
-                    nextJamTrack()
-                } else publishHostPlayback(player)
+            if (!jam.value.isHost) {
+                if (jam.value.sessionId.isNotEmpty()) {
+                    if (jam.value.listenLocally) syncGuestAudio()
+                    else if (player.playWhenReady) player.pause()
+                }
+                return
             }
+            // Native repeat-all wraps through the retained playback history.
+            if (events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION) && player.repeatMode == Player.REPEAT_MODE_ALL &&
+                player.currentMediaItemIndex == 0 && player.mediaItemCount > 1) {
+                restoreUpcoming(player)
+            }
+            publishHostPlayback(player)
         }
     }
 
@@ -88,6 +99,7 @@ internal class JamSession @Inject constructor(
         jamSaved?.let { jam.value = JamViewState(url = if (it.sessionId.isEmpty()) settingsStore.load().companionUrl else it.url, name = it.name,
             sessionId = it.sessionId, inviteToken = it.inviteToken,
             memberId = it.memberId,
+            listenLocally = it.listenLocally,
             connection = if (it.sessionId.isEmpty()) "Disconnected" else "Reconnecting",
             inviteQr = if (it.sessionId.isNotEmpty() && it.inviteToken.isNotEmpty())
                 makeJamQr(jamInviteLink(it.url, it.sessionId, it.inviteToken)) else null) }
@@ -100,8 +112,8 @@ internal class JamSession @Inject constructor(
         player.addListener(listener)
         if (jam.value.sessionId.isNotEmpty()) {
             player.setPlaybackSpeed(1f)
-            player.repeatMode = Player.REPEAT_MODE_OFF
-            player.shuffleModeEnabled = false
+            // Reconnecting must not reset the host's playback modes.
+            if (jamSaved?.inviteToken.isNullOrEmpty()) { player.pause(); player.stop() }
         }
         jamSaved?.takeIf { it.sessionId.isNotEmpty() }?.let(::resumeJam)
     }
@@ -127,15 +139,25 @@ internal class JamSession @Inject constructor(
             jam.value = jam.value.copy(url = url)
     }
 
-    fun guestPlayback(playing: Boolean) {
+    fun guestPlayback(playing: Boolean) = requestPlayback(if (playing) "play" else "pause")
+
+    fun requestPlayback(action: String, trackId: String? = null, position: Long? = null,
+                        shuffle: Boolean? = null, repeat: Int? = null, itemId: String? = null) {
         val state = jam.value
-        if (!state.guestPlayback || state.connection != "Connected") return
-        val current = state.playback ?: return
-        if (current.trackId.isEmpty()) return
-        sendJam(JSONObject().put("type", "playback.set").put("track_id", current.trackId)
-            .put("playing", playing)
-            .put("position_ms", current.targetPosition(System.currentTimeMillis() + jamClockOffsetMs)))
+        if (!state.isHost && (state.connection != "Connected" || !state.guestPlayback)) return
+        val command = JSONObject().put("action", action)
+        trackId?.let { command.put("track_id", it) }
+        position?.let { command.put("position_ms", it) }
+        shuffle?.let { command.put("shuffle", it) }
+        repeat?.let { command.put("repeat", it) }
+        itemId?.let { command.put("item_id", it) }
+        if (state.isHost) applyHostCommand(command)
+        else sendJam(command.put("type", "playback.request"))
     }
+
+    fun remotePosition(): Long = jam.value.playback?.targetPosition(
+        System.currentTimeMillis() + jamClockOffsetMs) ?: 0L
+
     private fun makeJamQr(link: String) = runCatching {
         val size = 512
         val matrix = QRCodeWriter().encode(link, BarcodeFormat.QR_CODE, size, size,
@@ -190,14 +212,14 @@ internal class JamSession @Inject constructor(
                 saved.saveJam(joined)
                 controller?.apply {
                     setPlaybackSpeed(1f)
-                    repeatMode = Player.REPEAT_MODE_OFF
-                    shuffleModeEnabled = false
+                    if (sessionId != null) { pause(); stop() }
                 }
                 jam.value = jam.value.copy(sessionId = joined.sessionId,
                     inviteToken = joined.inviteToken, memberId = joined.memberId,
                     hostId = identity.snapshot.hostId, members = identity.snapshot.members,
                     queue = identity.snapshot.queue, playback = identity.snapshot.playback,
                     guestPlayback = identity.snapshot.guestPlayback,
+                    listenLocally = false, chooseOutput = sessionId != null,
                     connection = "Connecting", error = null, pendingInvite = "",
                     inviteQr = if (sessionId == null) makeJamQr(jamInviteLink(
                         base, joined.sessionId, joined.inviteToken)) else null)
@@ -234,7 +256,8 @@ internal class JamSession @Inject constructor(
                         while (isActive) {
                             webSocket.send(JSONObject().put("type", "heartbeat")
                                 .put("nonce", System.currentTimeMillis().toString()).toString())
-                            if (!jam.value.isHost) syncJamPlayback()
+                            if (jam.value.isHost) controller?.let(::publishHostPlayback)
+                            else if (jam.value.listenLocally) syncGuestAudio()
                             delay(5_000)
                         }
                     }
@@ -271,6 +294,8 @@ internal class JamSession @Inject constructor(
             if (generation != jamGeneration || jamSaved?.sessionId.isNullOrEmpty()) return@runOnUiThread
             jamHeartbeat?.cancel()
             jam.value = jam.value.copy(connection = "Reconnecting")
+            if (!jam.value.isHost) controller?.apply { pause(); stop() }
+            onStateChanged()
             if (jamReconnect?.isActive == true) return@runOnUiThread
             jamReconnect = scope.launch {
                 delay(3_000)
@@ -291,40 +316,46 @@ internal class JamSession @Inject constructor(
                     if (jamRevision < 0) jamClockOffsetMs =
                         snapshot.playback.serverTimeMs - System.currentTimeMillis()
                     jamRevision = snapshot.revision
-                    val wasConnected = jam.value.hostId.isNotEmpty()
                     jam.value = jam.value.copy(hostId = snapshot.hostId,
                         members = snapshot.members, queue = snapshot.queue,
                         playback = snapshot.playback, guestPlayback = snapshot.guestPlayback,
                         connection = "Connected", error = null)
+                    consumed.retainAll(snapshot.queue.map { it.id }.toSet())
+                    pendingConsumption.retainAll(snapshot.queue.map { it.id }.toSet())
                     onStateChanged()
                     if (jam.value.isHost) {
-                        jamSeedTrackIds?.let { tracks ->
+                        val pending = jamSeedTrackIds
+                        if (pending != null && snapshot.queue.isEmpty() && pending.isNotEmpty()) {
                             jamSeedTrackIds = null
-                            if (tracks.isNotEmpty() && snapshot.queue.isEmpty())
-                                sendJam(JSONObject().put("type", "queue.seed")
-                                    .put("track_ids", org.json.JSONArray(tracks)))
+                            sendJam(JSONObject().put("type", "queue.seed").put("track_ids", JSONArray(pending)))
+                        } else {
+                            jamSeedTrackIds = null
+                            if (restoringQueue == snapshot.queue.map { it.trackId }) restoringQueue = null
+                            if (restoringQueue == null) syncHostQueue()
                         }
-                        if (snapshot.playback.trackId.isEmpty() && controller?.currentMediaItem != null) {
-                            jamAwaitingNext = false
-                            jamAdvancing = false
-                            controller?.let(::publishHostPlayback)
-                        } else if (jamAwaitingNext || playerStateDiffers(snapshot.playback) ||
-                            (!wasConnected && snapshot.playback.trackId.isNotEmpty())) {
-                            jamAwaitingNext = false
-                            jamAdvancing = false
-                            syncJamPlayback(forceHost = true)
-                        }
-                    } else syncJamPlayback()
+                        controller?.let(::publishHostPlayback)
+                    } else {
+                        if (!jam.value.listenLocally) controller?.pause()
+                        loadRemoteSong(snapshot.playback.trackId)
+                        syncGuestAudio()
+                    }
                 }
+                "playback.request" -> if (jam.value.isHost) applyHostCommand(event.getJSONObject("command"),
+                    fromGuest = event.optString("member_id") != jam.value.hostId)
+
                 "heartbeat" -> {
                     val sent = event.optString("nonce").toLongOrNull()
                     if (sent != null) jamClockOffsetMs = event.getLong("server_time_ms") -
                         (sent + System.currentTimeMillis()) / 2
                 }
                 "error" -> {
-                    jamAdvancing = false
-                    jamAwaitingNext = false
+                    restoringQueue = null
+                    lastPublished = null
+                    consumed.clear()
+                    pendingConsumption.clear()
                     jam.value = jam.value.copy(error = "Jam action failed: ${event.optString("error")}")
+                    if (event.optString("error") in listOf("item_not_found", "invalid_queue_order"))
+                        controller?.let(::publishHostPlayback)
                 }
                 "session_ended" -> clearJamSession()
             }
@@ -332,67 +363,140 @@ internal class JamSession @Inject constructor(
     }
 
     private fun publishHostPlayback(player: Player) {
-        if (!jam.value.isHost || jam.value.connection != "Connected" ||
-            jamAwaitingNext || System.currentTimeMillis() < jamApplyingUntil) return
-        val track = player.currentMediaItem?.mediaId.orEmpty()
-        val playing = track.isNotEmpty() && player.playWhenReady && player.playbackState != Player.STATE_ENDED
+        if (!jam.value.isHost || jam.value.connection != "Connected") return
+        // Publish a new song only after the host has prepared it, never while loading it.
+        if (player.mediaItemCount > 0 && player.playbackState !in listOf(Player.STATE_READY, Player.STATE_ENDED)) return
+        val item = player.currentMediaItem
+        val track = item?.mediaId.orEmpty()
+        val playing = track.isNotEmpty() && player.isPlaying
         val position = if (track.isEmpty()) 0L else player.currentPosition.coerceAtLeast(0L)
-        val previous = lastPublished
-        if (previous?.first == track && previous.second == playing &&
-            abs(previous.third - position) < 700) return
-        lastPublished = Triple(track, playing, position)
-        sendJam(JSONObject().put("type", "playback.set").put("track_id", track)
-            .put("playing", playing).put("position_ms", position))
+        val entry = (item?.localConfiguration?.tag as? String)?.takeIf { id ->
+            id !in consumed && jam.value.queue.any { it.id == id && it.trackId == track }
+        }
+        val fingerprint = "$track:$playing:${position / 700}:${player.shuffleModeEnabled}:${player.repeatMode}:$entry"
+        if (lastPublished == fingerprint && pendingConsumption.isEmpty()) return
+        val command = JSONObject().put("type", "playback.set").put("track_id", track)
+            .put("playing", playing).put("position_ms", position)
+            .put("shuffle", player.shuffleModeEnabled).put("repeat", player.repeatMode)
+        entry?.let { command.put("item_id", it) }
+        command.put("item_ids", JSONArray(pendingConsumption.filter { it != entry }))
+        val ids = (player.currentMediaItemIndex + 1 until player.mediaItemCount)
+            .mapNotNull { player.getMediaItemAt(it).localConfiguration?.tag as? String }
+        val expected = jam.value.queue.filter { it.id !in consumed && it.id !in pendingConsumption && it.id != entry }.map { it.id }
+        if (ids.size == expected.size && ids.toSet() == expected.toSet())
+            command.put("queue_ids", JSONArray(ids))
+        if (sendJam(command)) {
+            lastPublished = fingerprint
+            entry?.let(consumed::add)
+            consumed.addAll(pendingConsumption)
+            pendingConsumption.clear()
+        }
     }
 
-    private fun syncJamPlayback(forceHost: Boolean = false) {
-        if (jam.value.isHost && !forceHost) return
-        val target = jam.value.playback ?: return
+    private fun syncHostQueue() {
         val player = controller ?: return
-        if (target.trackId.isEmpty()) {
-            if (player.currentMediaItem != null) {
-                jamApplyingUntil = System.currentTimeMillis() + 1_500
-                player.stop()
-                player.clearMediaItems()
-            }
-            return
-        }
-        if (player.currentMediaItem?.mediaId != target.trackId) {
-            if (jamLoadingTrack == target.trackId) return
-            jamApply?.cancel()
-            jamLoadingTrack = target.trackId
-            jamApply = scope.launch {
-                try {
-                    val account = saved.load() ?: return@launch
-                    val song = runCatching { SubsonicClient(account).use { it.songById(target.trackId) } }
-                        .getOrNull()
-                    if (jam.value.playback?.trackId != target.trackId) return@launch
-                    if (song == null) {
-                        jam.value = jam.value.copy(error = "Song unavailable in this Navidrome library")
-                        return@launch
-                    }
-                    jamApplyingUntil = System.currentTimeMillis() + 1_500
-                    val item = SubsonicClient(account).use { song.toMediaItem(it) }
-                    if (jam.value.isHost && player.currentMediaItemIndex >= 0)
-                        player.replaceMediaItem(player.currentMediaItemIndex, item)
-                    else player.setMediaItem(item)
-                    player.prepare()
-                    player.seekTo(target.targetPosition(System.currentTimeMillis() + jamClockOffsetMs))
-                    if (target.playing) player.play() else player.pause()
-                } finally {
-                    jamLoadingTrack = null
+        val currentTag = player.currentMediaItem?.localConfiguration?.tag as? String
+        val upcoming = jam.value.queue.filter { it.id !in consumed && it.id !in pendingConsumption && it.id != currentTag }
+        val currentIDs = (player.currentMediaItemIndex + 1 until player.mediaItemCount)
+            .map { player.getMediaItemAt(it).localConfiguration?.tag as? String }
+        if (currentIDs == upcoming.map { it.id }) return
+        jamApply?.cancel()
+        val generation = jamGeneration
+        jamApply = scope.launch {
+            try {
+                // Seeded albums/playlists already have metadata. Fetch only newly added songs.
+                (0 until player.mediaItemCount).forEach { index ->
+                    player.getMediaItemAt(index).toSong().let { songs[it.id] = it }
                 }
-            }
-            return
+                val account = saved.load() ?: return@launch
+                val items = SubsonicClient(account).use { client -> upcoming.map { entry ->
+                    val song = songs[entry.trackId] ?: (client.songById(entry.trackId) ?: error("Song unavailable")).also { songs[it.id] = it }
+                    song.toMediaItem(client).buildUpon().setTag(entry.id).build()
+                } }
+                if (generation != jamGeneration || !jam.value.isHost ||
+                    upcoming.map { it.id } != jam.value.queue.filter { it.id !in consumed && it.id !in pendingConsumption && it.id != currentTag }.map { it.id }) return@launch
+                val start = (player.currentMediaItemIndex + 1).coerceAtLeast(0)
+                player.replaceMediaItems(start, player.mediaItemCount, items)
+                player.prepare()
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { jam.value = jam.value.copy(error = "Could not load the Jam queue") }
         }
-        val desired = target.targetPosition(System.currentTimeMillis() + jamClockOffsetMs)
-        if (abs(player.currentPosition - desired) > 1_200) {
-            jamApplyingUntil = System.currentTimeMillis() + 1_500
-            player.seekTo(desired)
+    }
+
+    private fun loadRemoteSong(trackId: String) {
+        if (remoteSong.value?.id == trackId) return
+        jamApply?.cancel()
+        remoteSong.value = null
+        remoteItem = null
+        if (trackId.isEmpty()) return
+        val generation = jamGeneration
+        jamApply = scope.launch {
+            try {
+                val account = saved.load() ?: return@launch
+                val song = songs[trackId] ?: (SubsonicClient(account).use { it.songById(trackId) } ?: error("Song unavailable")).also { songs[trackId] = it }
+                if (generation == jamGeneration && jam.value.playback?.trackId == trackId) {
+                    remoteSong.value = song
+                    remoteItem = SubsonicClient(account).use { song.toMediaItem(it) }
+                    syncGuestAudio()
+                    onStateChanged()
+                }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { jam.value = jam.value.copy(error = "Song unavailable in this Navidrome library") }
         }
-        if (player.playWhenReady != target.playing) {
-            jamApplyingUntil = System.currentTimeMillis() + 1_500
-            if (target.playing) player.play() else player.pause()
+    }
+
+    private fun applyHostCommand(command: JSONObject, fromGuest: Boolean = false) {
+        val previous = hostCommand
+        val generation = jamGeneration
+        hostCommand = scope.launch {
+            previous?.join()
+            val action = command.getString("action")
+            // Only commands using the future queue need to wait for its metadata.
+            if (action in listOf("next", "queue_item", "shuffle")) jamApply?.join()
+            val player = controller ?: return@launch
+            if (generation != jamGeneration || !jam.value.isHost) return@launch
+            if (fromGuest && (jam.value.connection != "Connected" || !jam.value.guestPlayback)) return@launch
+            try {
+                when (action) {
+                    "play" -> player.play()
+                    "pause" -> player.pause()
+                    "next" -> player.seekToNextMediaItem()
+                    "previous" -> {
+                        if (seekJamPrevious(player)) {
+                            jamApply?.cancel()
+                            jamApply = null
+                            restoreUpcoming(player)
+                        }
+                    }
+                    "seek" -> player.seekTo(command.getLong("position_ms"))
+                    "shuffle" -> player.shuffleModeEnabled = command.getBoolean("shuffle")
+                    "repeat" -> player.repeatMode = command.getInt("repeat")
+                    "queue_item" -> {
+                        val id = command.getString("item_id")
+                        val index = (player.currentMediaItemIndex + 1 until player.mediaItemCount)
+                            .firstOrNull { player.getMediaItemAt(it).localConfiguration?.tag == id } ?: return@launch
+                        player.moveMediaItem(index, player.currentMediaItemIndex + 1)
+                        player.seekToNextMediaItem()
+                        player.play()
+                    }
+                    "track" -> {
+                        val account = saved.load() ?: return@launch
+                        val trackId = command.getString("track_id")
+                        val song = songs[trackId] ?: (SubsonicClient(account).use { it.songById(trackId) } ?: error("Song unavailable"))
+                        if (generation != jamGeneration || !jam.value.isHost) return@launch
+                        val item = SubsonicClient(account).use { song.toMediaItem(it) }
+                        val index = player.currentMediaItemIndex.coerceAtLeast(0)
+                        if (player.mediaItemCount == 0) player.setMediaItem(item)
+                        else player.replaceMediaItem(index, item)
+                        player.seekToDefaultPosition(index)
+                        player.prepare()
+                        player.play()
+                    }
+                }
+                if (action == "previous" || action == "seek") lastPublished = null
+                publishHostPlayback(player)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { jam.value = jam.value.copy(error = "Could not apply the Jam playback command") }
         }
     }
 
@@ -402,27 +506,50 @@ internal class JamSession @Inject constructor(
         return false
     }
 
-    private fun playerStateDiffers(target: JamPlayback): Boolean {
-        val player = controller ?: return false
-        return player.currentMediaItem?.mediaId.orEmpty() != target.trackId ||
-            (target.trackId.isNotEmpty() && player.playWhenReady != target.playing)
+    fun toggleGuestPlayback() = guestPlayback(jam.value.playback?.playing != true)
+    fun nextJamTrack() = requestPlayback("next")
+
+    private fun restoreUpcoming(player: Player) {
+        restoringQueue = (player.currentMediaItemIndex + 1 until player.mediaItemCount)
+            .take(1000).map { player.getMediaItemAt(it).mediaId }
+        if (!sendJam(JSONObject().put("type", "queue.restore").put("track_ids", JSONArray(restoringQueue))))
+            restoringQueue = null
     }
 
-    fun toggleGuestPlayback() {
+    fun chooseOutput() { jam.value = jam.value.copy(chooseOutput = true) }
+
+    fun setListenLocally(enabled: Boolean) {
+        if (jam.value.isHost || jam.value.sessionId.isEmpty()) return
+        jamSaved = jamSaved?.copy(listenLocally = enabled)?.also(saved::saveJam)
+        jam.value = jam.value.copy(listenLocally = enabled, chooseOutput = false)
+        if (enabled) syncGuestAudio() else controller?.apply { pause(); stop() }
+    }
+
+    private fun syncGuestAudio() {
         val state = jam.value
-        if (!state.guestPlayback || state.connection != "Connected") return
-        val current = state.playback ?: return
-        if (current.trackId.isEmpty()) return
-        sendJam(JSONObject().put("type", "playback.set").put("track_id", current.trackId)
-            .put("playing", !current.playing)
-            .put("position_ms", current.targetPosition(System.currentTimeMillis() + jamClockOffsetMs)))
-    }
-
-    fun nextJamTrack() {
-        if ((!jam.value.isHost && !jam.value.guestPlayback) || jamAwaitingNext) return
-        val sent = sendJam(JSONObject().put("type", "playback.next"))
-        jamAwaitingNext = sent && jam.value.isHost
-        if (!sent) jamAdvancing = false
+        if (state.isHost || !state.listenLocally || state.connection != "Connected" || guestApplying) return
+        val player = controller ?: return
+        val target = state.playback ?: return
+        val song = remoteSong.value
+        guestApplying = true
+        try {
+            if (target.trackId.isEmpty()) { player.pause(); player.clearMediaItems(); return }
+            if (song?.id != target.trackId) { player.pause(); return }
+            if (player.currentMediaItem?.mediaId != song.id || player.mediaItemCount != 1) {
+                val account = saved.load() ?: return
+                player.repeatMode = Player.REPEAT_MODE_OFF
+                player.shuffleModeEnabled = false
+                player.setMediaItem(SubsonicClient(account).use { song.toMediaItem(it) })
+                player.prepare()
+                player.seekTo(remotePosition())
+            }
+            if (player.playbackState == Player.STATE_IDLE) player.prepare()
+            // Re-anchor after buffering as well as snapshots/heartbeats; guests never advance themselves.
+            val desired = remotePosition().coerceAtMost(song.durationSeconds.takeIf { it > 0 }?.times(1000L) ?: 604800000L)
+            if (abs(player.currentPosition - desired) > 350) player.seekTo(desired)
+            if (player.playbackState == Player.STATE_READY) player.playWhenReady = target.playing
+            else if (!target.playing) player.pause()
+        } finally { guestApplying = false }
     }
 
     fun leaveJam() {
@@ -435,11 +562,13 @@ internal class JamSession @Inject constructor(
     }
 
     fun clearJamSession() {
+        val wasGuest = jam.value.sessionId.isNotEmpty() && !jam.value.isHost
         closeJamTransport()
         saved.clearJamSession()
         jamSaved = saved.loadJam()
         jam.value = JamViewState(url = settingsStore.load().companionUrl,
             name = jamSaved?.name ?: saved.load()?.username.orEmpty())
+        if (wasGuest) controller?.apply { pause(); stop() }
         onStateChanged()
     }
 
@@ -453,9 +582,13 @@ internal class JamSession @Inject constructor(
         jamRelay?.close()
         jamRelay = null
         jamRevision = -1L
-        jamAwaitingNext = false
-        jamAdvancing = false
-        jamLoadingTrack = null
+        hostCommand?.cancel()
+        restoringQueue = null
+        consumed.clear()
+        pendingConsumption.clear()
+        remoteSong.value = null
+        remoteItem = null
+        songs.clear()
         lastPublished = null
     }
 

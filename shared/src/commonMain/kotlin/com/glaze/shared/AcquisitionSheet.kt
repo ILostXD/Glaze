@@ -11,6 +11,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -36,7 +38,7 @@ internal fun AcquisitionSheet(credentials: ServerCredentials, companionUrl: Stri
     LaunchedEffect(api) {
         if (request != null) {
             busy = true
-            try { job = api.create(artist, title, kind).also(onJobCreated) }
+            try { job = api.create(artist, title, kind, request?.catalogueAlbumId, request?.albumTitle).also(onJobCreated) }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { error = "Could not start acquisition. Check your connection or account." }
             finally { busy = false }
@@ -75,12 +77,15 @@ internal fun AcquisitionSheet(credentials: ServerCredentials, companionUrl: Stri
                 } else if (job == null) Text("$artist â€” $title", color = Color.White,
                     fontWeight = FontWeight.SemiBold)
                 if (request == null || error != null || displayedJob?.status == "failed")
-                JamButton(if (busy) "Searchingâ€¦" else if (request != null) "Retry request" else "Add to Library", MaterialSymbols.RoundedFilled.Add,
+                JamButton(if (busy) "Searchingâ€¦" else if (request != null) "Retry request" else "Add to Library",
+                    if (request != null) MaterialSymbols.RoundedFilled.Refresh else MaterialSymbols.RoundedFilled.Add,
                     enabled = artist.isNotBlank() && title.isNotBlank() && !busy) {
                     scope.launch {
                         busy = true
                         error = null
-                        try { job = api.create(artist, title, kind).also(onJobCreated) }
+                        try { job = (displayedJob?.takeIf { it.status == "failed" &&
+                            it.artist == artist.trim() && it.title == title.trim() && it.kind == kind }?.let { api.retry(it.id) }
+                            ?: api.create(artist, title, kind, request?.catalogueAlbumId, request?.albumTitle)).also(onJobCreated) }
                         catch (cancelled: CancellationException) { throw cancelled }
                         catch (_: Exception) { error = "Could not start acquisition. Check your connection or account." }
                         finally { busy = false }
@@ -97,7 +102,11 @@ internal fun AcquisitionSheet(credentials: ServerCredentials, companionUrl: Stri
 }
 
 @Composable
-internal fun AcquisitionStatusSheet(jobs: List<AcquisitionJob>, error: String? = null) {
+internal fun AcquisitionStatusSheet(jobs: List<AcquisitionJob>, error: String? = null,
+    onRetry: suspend (AcquisitionJob) -> Unit) {
+    val scope = rememberCoroutineScope()
+    val retrying = remember { mutableStateMapOf<String, Boolean>() }
+    val errors = remember { mutableStateMapOf<String, String>() }
     PlayerSheetSurface(null, Modifier.fillMaxWidth()) {
         Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 24.dp)) {
             SheetHandle()
@@ -108,14 +117,25 @@ internal fun AcquisitionStatusSheet(jobs: List<AcquisitionJob>, error: String? =
                 verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (error != null) item { Text(error, color = Color.LightGray) }
                 if (jobs.isEmpty()) item { Text("No downloads yet", color = Color.LightGray) }
-                items(jobs.take(20), key = { it.id }) { AcquisitionJobCard(it) }
+                items(jobs.take(20), key = { it.id }) { job ->
+                    AcquisitionJobCard(job, retrying[job.id] == true, errors[job.id]) {
+                        scope.launch {
+                            retrying[job.id] = true
+                            errors.remove(job.id)
+                            try { onRetry(job) }
+                            catch (cancelled: CancellationException) { throw cancelled }
+                            catch (failure: Exception) { errors[job.id] = failure.message ?: "Could not retry. Please try again." }
+                            finally { retrying[job.id] = false }
+                        }
+                    }
+                }
             }
         }
     }
 }
 
 @Composable
-private fun AcquisitionJobCard(job: AcquisitionJob) {
+private fun AcquisitionJobCard(job: AcquisitionJob, retrying: Boolean = false, retryError: String? = null, onRetry: (() -> Unit)? = null) {
     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp))
         .background(Color.White.copy(alpha = 0.09f)).padding(16.dp),
         verticalAlignment = Alignment.CenterVertically) {
@@ -126,8 +146,20 @@ private fun AcquisitionJobCard(job: AcquisitionJob) {
                 job.status.replaceFirstChar { it.uppercase() }) +
                 if (job.source.isNotBlank()) " Â· ${job.source}" else "",
                 color = Color.White.copy(alpha = 0.72f), fontSize = 14.sp)
-            if (job.error.isNotBlank()) Text(job.error.replace('_', ' '),
+            if (job.error.isNotBlank()) Text(when {
+                job.error.contains("download_release_mismatch") -> "The downloaded file was a different album or edition. It wasn’t added."
+                job.error.contains("download_is_compilation") -> "Only a compilation copy was found. It wasn’t added."
+                job.error.contains("download_track_mismatch") || job.error.contains("download_artist_mismatch") -> "The downloaded song didn’t match your request. It wasn’t added."
+                job.error.contains("download_metadata_unreadable") -> "Couldn’t verify the downloaded file’s tags. It wasn’t added."
+                else -> job.error.replace('_', ' ')
+            },
                 color = Color(0xFFFFB4AB), fontSize = 13.sp)
+            retryError?.let { Text(it, color = Color(0xFFFFB4AB), fontSize = 13.sp) }
+        }
+        if (job.status == "failed" && onRetry != null) IconButton(onClick = onRetry, enabled = !retrying,
+            modifier = Modifier.semantics { contentDescription = if (retrying) "Retrying download" else "Retry download" }) {
+            if (retrying) CircularProgressIndicator(Modifier.size(24.dp), color = Color.White, strokeWidth = 2.dp)
+            else Icon(MaterialSymbols.RoundedFilled.Refresh, contentDescription = null, tint = Color.White)
         }
         if (job.pending) CircularProgressIndicator(Modifier.padding(start = 14.dp).size(22.dp),
             color = Color.White, strokeWidth = 2.dp)

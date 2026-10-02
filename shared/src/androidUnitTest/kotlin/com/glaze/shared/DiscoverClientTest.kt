@@ -9,6 +9,19 @@ import kotlinx.coroutines.runBlocking
 import kotlin.test.*
 
 class DiscoverClientTest {
+    @Test fun companionPreviewReusesAuthenticatedCatalogueWithoutDirectRefetch() = runBlocking {
+        val api = AcquisitionClient("https://companion.test", ServerCredentials("https://library.test", "owner", "secret"),
+            HttpClient(MockEngine { request ->
+                assertEquals("/api/v1/acquisition/jobs/preview/42", request.url.encodedPath)
+                assertEquals("owner", request.headers["X-Jam-Navidrome-User"])
+                respond("""{"id":42,"title":"OKRA","artist":{"name":"Tyler, The Creator"},"nb_tracks":1,"tracks":{"data":[{"id":1,"title":"OKRA","artist":{"name":"Tyler, The Creator"}}]}}""",
+                    headers = headersOf(HttpHeaders.ContentType, "application/json"))
+            }))
+        val catalogue = DiscoverClient(HttpClient(MockEngine { error("Preview must use companion cache") }), api)
+        try { assertEquals("OKRA", catalogue.album("42").tracks.single().title) }
+        finally { catalogue.close(); api.close() }
+    }
+
     @Test fun artistDiscographyResolvesNamesakesUsingOwnedReleases() = runBlocking {
         val catalogue = DiscoverClient(HttpClient(MockEngine { request ->
             val body = when (request.url.encodedPath) {

@@ -9,6 +9,20 @@ import kotlinx.coroutines.runBlocking
 import kotlin.test.*
 
 class ReleaseClientTest {
+    @Test fun installedSingleUsesLibraryIdAndIgnoresItsAlbumName() {
+        val track = ReleaseTrack("apple-id", "Backwards (feat. T.I.)", "Quavo", 180, true, true)
+        val single = Song("navidrome-id", "Backwards", "Quavo, T.I.", "Backwards - Single", durationSeconds = 181)
+        assertEquals(single, installedReleaseTrack(track, listOf(single)))
+        assertEquals(single.copy(artist = "Quavo • T.I."), installedReleaseTrack(
+            track.copy(artist = "Quavo & T.I."), listOf(single.copy(artist = "Quavo • T.I."))))
+        assertEquals(single, installedReleaseTrack(track.copy(released = false), listOf(single)))
+        assertNull(installedReleaseTrack(track, listOf(single.copy(artist = "Other Artist"))))
+        assertNull(installedReleaseTrack(track, listOf(single.copy(title = "Backwards (Live)"))))
+        assertNull(installedReleaseTrack(track, listOf(single.copy(durationSeconds = 220))))
+        val creator = single.copy(title = "Track", artist = "Tyler, The Creator")
+        assertEquals(creator, installedReleaseTrack(track.copy(title = "Track", artist = "Tyler, The Creator"), listOf(creator)))
+    }
+
     @Test fun transientReleaseFailureRetriesAndCancellationDoesNot() = runBlocking {
         var attempts = 0
         val api = ReleaseClient("https://companion.test", ServerCredentials("https://nav.test", "andy", "password"),
@@ -28,9 +42,16 @@ class ReleaseClientTest {
     }
 
     @Test fun countdownAndAuthenticatedPresaveRoundTrip() = runBlocking {
-        assertEquals(listOf(1L, 2L, 3L, 4L), releaseCountdown(93_784_000, 0))
-        assertEquals(listOf(0L, 0L, 0L, 0L), releaseCountdown(100, 200))
-        assertEquals(listOf(0L, 0L, 0L, 1L), releaseCountdown(100, 0))
+        val originalZone = java.util.TimeZone.getDefault()
+        try {
+            java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("Europe/Vienna"))
+            val now = java.time.Instant.parse("2026-10-02T05:10:00Z").toEpochMilli()
+            assertEquals(0L, releaseDaysUntil("2026-10-02", now))
+            assertEquals(1L, releaseDaysUntil("2026-10-03", now))
+            assertNull(releaseDaysUntil("unknown", now))
+            java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("America/Los_Angeles"))
+            assertEquals(1L, releaseDaysUntil("2026-10-02", now))
+        } finally { java.util.TimeZone.setDefault(originalZone) }
         val http = HttpClient(MockEngine { request ->
             assertEquals("andy", request.headers["X-Jam-Navidrome-User"])
             assertEquals(32, request.headers["X-Jam-Navidrome-Token"]?.length)

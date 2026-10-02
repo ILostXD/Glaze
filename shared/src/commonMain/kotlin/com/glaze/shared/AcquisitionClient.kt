@@ -7,6 +7,7 @@ import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
+import io.ktor.client.plugins.expectSuccess
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import kotlinx.serialization.json.*
@@ -43,7 +44,7 @@ internal class AcquisitionClient(private val url: String, private val credential
         header("X-Jam-Navidrome-Token", token)
     }
 
-    suspend fun create(artist: String, title: String, kind: String): AcquisitionJob =
+    suspend fun create(artist: String, title: String, kind: String, catalogueAlbumId: String? = null, albumTitle: String? = null): AcquisitionJob =
         parse(http.post("${baseUrl()}/api/v1/acquisition/jobs") {
             ownerHeaders()
             contentType(ContentType.Application.Json)
@@ -51,8 +52,29 @@ internal class AcquisitionClient(private val url: String, private val credential
                 put("artist", artist.trim())
                 put("title", title.trim())
                 put("kind", kind)
+                catalogueAlbumId?.let { put("catalogue_album_id", it) }
+                albumTitle?.takeIf { it.isNotBlank() }?.let { put("album", it) }
             }.toString())
         }.body())
+
+    suspend fun retry(id: String): AcquisitionJob {
+        val response = http.post("${baseUrl()}/api/v1/acquisition/jobs") {
+            expectSuccess = false
+            ownerHeaders()
+            contentType(ContentType.Application.Json)
+            setBody(buildJsonObject { put("retry_id", id) }.toString())
+        }
+        check(response.status.value == 202) {
+            if (response.status.value == 409) "This download is already active or its original transfer is still being checked."
+            else "Could not retry. Check your connection and try again."
+        }
+        return parse(response.body())
+    }
+
+    suspend fun catalogueAlbum(id: String): String {
+        require(id.isNotEmpty() && id.length <= 20 && id.all(Char::isDigit))
+        return http.get("${baseUrl()}/api/v1/acquisition/jobs/preview/$id") { ownerHeaders() }.body()
+    }
 
     suspend fun get(id: String): AcquisitionJob = parse(http.get(
         "${baseUrl()}/api/v1/acquisition/jobs/$id") { ownerHeaders() }.body())

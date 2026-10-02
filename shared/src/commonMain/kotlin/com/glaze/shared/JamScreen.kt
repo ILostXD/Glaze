@@ -35,7 +35,8 @@ data class JamQueueEntry(val id: String, val trackId: String, val addedBy: Strin
                          val voters: Set<String>)
 data class JamMember(val id: String, val name: String, val avatar: ImageBitmap? = null)
 data class JamPlayback(val trackId: String, val playing: Boolean, val positionMs: Long,
-                       val updatedAtMs: Long, val serverTimeMs: Long)
+                       val updatedAtMs: Long, val serverTimeMs: Long,
+                       val shuffle: Boolean = false, val repeat: Int = 0)
 data class JamViewState(
     val url: String = "",
     val name: String = "",
@@ -51,6 +52,8 @@ data class JamViewState(
     val pendingInvite: String = "",
     val inviteQr: ImageBitmap? = null,
     val guestPlayback: Boolean = true,
+    val listenLocally: Boolean = false,
+    val chooseOutput: Boolean = false,
 ) {
     val isHost: Boolean get() = sessionId.isNotEmpty() && memberId == hostId
 }
@@ -66,6 +69,9 @@ data class JamActions(
     val move: (itemId: String, toIndex: Int) -> Unit,
     val setGuestPlayback: (Boolean) -> Unit,
     val vote: (itemId: String) -> Unit,
+    val chooseOutput: () -> Unit = {},
+    val setListenLocally: (Boolean) -> Unit = {},
+    val playItem: (String) -> Unit = {},
 )
 
 private enum class JamPage { Welcome, Join, Invite, GuestControls }
@@ -110,6 +116,12 @@ internal fun JamScreen(
             state.error?.let {
                 Text(it, color = Color(0xFFFFB4AB), fontSize = 13.sp,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 8.dp))
+            }
+            if (active && !state.isHost) {
+                JamButton(if (state.listenLocally) "Listening on this phone" else "Listening on host’s phone",
+                    MaterialSymbols.RoundedFilled.Speaker, primary = false,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 8.dp),
+                    onClick = actions.chooseOutput)
             }
             when (page) {
                 JamPage.Welcome, JamPage.Join -> Column(Modifier.weight(1f, fill = false)
@@ -160,7 +172,7 @@ internal fun JamScreen(
                 JamPage.GuestControls -> Column(Modifier.padding(horizontal = 22.dp),
                     verticalArrangement = Arrangement.spacedBy(18.dp)) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text("Play, pause, and skip tracks", color = Color.White, fontSize = 16.sp,
+                        Text("Allow playback controls", color = Color.White, fontSize = 16.sp,
                             modifier = Modifier.weight(1f))
                         Switch(checked = state.guestPlayback, onCheckedChange = actions.setGuestPlayback)
                     }

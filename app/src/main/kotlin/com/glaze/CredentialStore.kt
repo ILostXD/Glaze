@@ -17,7 +17,8 @@ import javax.inject.Inject
 
 internal data class JamSaved(val url: String, val apiToken: String, val name: String,
                              val sessionId: String = "", val memberId: String = "",
-                             val memberToken: String = "", val inviteToken: String = "")
+                             val memberToken: String = "", val inviteToken: String = "",
+                             val listenLocally: Boolean = false)
 
 /** Encrypts the server password with a device-bound Android Keystore key. */
 internal class CredentialStore @Inject constructor(@ApplicationContext context: Context) {
@@ -39,13 +40,14 @@ internal class CredentialStore @Inject constructor(@ApplicationContext context: 
         val json = loadJson("jam") ?: return null
         JamSaved(json.getString("url"), json.getString("apiToken"), json.getString("name"),
             json.optString("sessionId"), json.optString("memberId"), json.optString("memberToken"),
-            json.optString("inviteToken"))
+            json.optString("inviteToken"), json.optBoolean("listenLocally"))
     } catch (_: Exception) { null }
 
     fun saveJam(jam: JamSaved) = saveJson("jam", JSONObject()
         .put("url", jam.url).put("apiToken", jam.apiToken).put("name", jam.name)
         .put("sessionId", jam.sessionId).put("memberId", jam.memberId)
-        .put("memberToken", jam.memberToken).put("inviteToken", jam.inviteToken))
+        .put("memberToken", jam.memberToken).put("inviteToken", jam.inviteToken)
+        .put("listenLocally", jam.listenLocally))
 
     fun clearJamSession() {
         loadJam()?.let { saveJam(it.copy(sessionId = "", memberId = "", memberToken = "", inviteToken = "")) }
